@@ -208,8 +208,10 @@ fusermount3 -u /tmp/cdi-player
 Files are fetched on first access and cached for the lifetime of the mount.
 New regular files may be written only in `/nvr`; their contents are staged
 locally and sent to the player when the file is closed. `/cd`,
-existing files, directories, rename, and deletion remain read-only or
-unsupported. Use `put` when you want an explicit one-shot transfer instead.
+existing files, directories, and rename remain read-only or unsupported. Files
+in `/nvr` can be permanently removed with ordinary `rm`; the same OS-9
+limitations described for `delete` apply. Use `put` when you want an explicit
+one-shot transfer instead.
 
 ## MiSTer FPGA
 

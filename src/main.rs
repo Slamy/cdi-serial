@@ -1078,6 +1078,56 @@ impl Filesystem for CdiFuse {
             Err(()) => reply.error(Errno::EIO),
         }
     }
+    fn unlink(&self, _: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
+        let parent_path = self.path(parent.0).unwrap_or_else(|| "/".into());
+        let name = name.to_string_lossy();
+        if parent_path == "/cd" {
+            reply.error(Errno::EROFS);
+            return;
+        }
+        if parent_path != "/nvr" {
+            reply.error(Errno::EACCES);
+            return;
+        }
+        if name.is_empty() || name == "." || name == ".." || name.contains('/') {
+            reply.error(Errno::EINVAL);
+            return;
+        }
+        let path = format!("/nvr/{name}");
+        if self
+            .pending
+            .lock()
+            .ok()
+            .is_some_and(|pending| pending.values().any(|file| file.path == path))
+        {
+            reply.error(Errno::EBUSY);
+            return;
+        }
+        let result = self
+            .session
+            .lock()
+            .map_err(|_| ())
+            .and_then(|mut session| delete_file(&mut *session, &path).map_err(|_| ()));
+        match result {
+            Ok(()) => {
+                self.files
+                    .lock()
+                    .ok()
+                    .and_then(|mut files| files.remove(&path));
+                self.sizes
+                    .lock()
+                    .ok()
+                    .and_then(|mut sizes| sizes.remove(&path));
+                if let Ok(mut directories) = self.directories.lock() {
+                    if let Some(names) = directories.get_mut("/nvr") {
+                        names.retain(|entry| entry != name.as_ref());
+                    }
+                }
+                reply.ok();
+            }
+            Err(()) => reply.error(Errno::EIO),
+        }
+    }
     fn readdir(
         &self,
         _: &Request,
