@@ -21,6 +21,22 @@ pub const EXECUTE: u8 = 0x04;
 pub const END: u8 = 0x08;
 pub const READ: u8 = 0x81;
 pub const BAUDRATE: u8 = 0x80;
+/// Allocate a temporary buffer in the full Stub.
+pub const BUFFER: u8 = 0x82;
+/// Select the full Stub's saved 68000 registers as the current data area.
+pub const REGISTERS: u8 = 0x83;
+/// Invoke an OS-9 system call through the full Stub.
+pub const OS9CALL: u8 = 0x84;
+
+/// Mask bit for the 68000 D0 register in a full Stub register request.
+pub const REG_D0: u32 = 1 << 0;
+/// Mask bit for the 68000 D1 register in a full Stub register request.
+pub const REG_D1: u32 = 1 << 1;
+/// Mask bit for the 68000 A0 register in a full Stub register request.
+pub const REG_A0: u32 = 1 << 8;
+/// Set in an OS-9-call response when the OS-9 call failed. D1 contains the
+/// OS-9 error code when this bit is present in the returned mask.
+pub const REG_CARRY: u32 = 1 << 31;
 
 #[derive(Debug)]
 pub enum Error {
@@ -142,6 +158,19 @@ impl<T: Read + Write> Session<T> {
         )))
     }
 
+    /// Finds a full-Stub response header while tolerating echoed request
+    /// bytes or terminal text that was already queued on the serial link.
+    fn read_response_header(&mut self, expected_kind: u8) -> Result<()> {
+        for _ in 0..4096 {
+            match self.read_notification()? {
+                CAN => return Err(Error::Cancelled),
+                DLE if self.read_notification()? == expected_kind => return Ok(()),
+                _ => continue,
+            }
+        }
+        Err(Error::InvalidReadResponse)
+    }
+
     pub fn set_address(&mut self, address: u32) -> Result<()> {
         self.send_acknowledged(&request(ADDRESS, &address.to_be_bytes()), "address request")
     }
@@ -154,6 +183,88 @@ impl<T: Read + Write> Session<T> {
         body.extend_from_slice(&(data.len() as u16).to_be_bytes());
         body.extend_from_slice(data);
         self.send_acknowledged(&request(WRITE, &body), "write request")
+    }
+
+    /// Allocates a temporary full-Stub buffer and makes it the current data
+    /// area. Returns its actual size and target address.
+    pub fn allocate_buffer(&mut self, size: usize) -> Result<(usize, u32)> {
+        if !(1..=u16::MAX as usize).contains(&size) {
+            return Err(Error::InvalidChunkSize(size));
+        }
+        self.send_acknowledged(
+            &request(BUFFER, &(size as u16).to_be_bytes()),
+            "buffer request",
+        )?;
+        self.read_response_header(BUFFER)?;
+        let mut response = [0; 6];
+        self.io.read_exact(&mut response)?;
+        let checksum = self.read_notification()?;
+        let computed = [DLE, BUFFER]
+            .into_iter()
+            .chain(response)
+            .fold(0, |check, byte| check ^ byte);
+        if checksum != computed {
+            self.io.write_all(&[NAK])?;
+            self.io.flush()?;
+            return Err(Error::InvalidReadResponse);
+        }
+        self.io.write_all(&[ACK])?;
+        self.io.flush()?;
+        Ok((
+            usize::from(u16::from_be_bytes([response[0], response[1]])),
+            u32::from_be_bytes([response[2], response[3], response[4], response[5]]),
+        ))
+    }
+
+    /// Selects saved 68000 registers and writes their big-endian values in
+    /// ascending register-bit order. The full Stub accepts 32-bit values for
+    /// the Dn/An registers used by the public constants above.
+    pub fn set_registers(&mut self, mask: u32, values: &[u32]) -> Result<()> {
+        if values.len() != mask.count_ones() as usize {
+            return Err(Error::Io(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "register value count does not match register mask",
+            )));
+        }
+        self.select_registers(mask)?;
+        let mut data = Vec::with_capacity(values.len() * 4);
+        for value in values {
+            data.extend_from_slice(&value.to_be_bytes());
+        }
+        self.write(&data)
+    }
+
+    /// Selects saved 68000 registers as the current data area without
+    /// modifying them. A subsequent [`read`](Self::read) retrieves their
+    /// values in ascending register-bit order.
+    pub fn select_registers(&mut self, mask: u32) -> Result<()> {
+        self.send_acknowledged(&request(REGISTERS, &mask.to_be_bytes()), "register request")
+    }
+
+    /// Invokes an OS-9 call through a full Stub. `result_mask` asks the Stub
+    /// to preserve selected registers for the caller; the returned mask also
+    /// reports registers changed by OS-9 and the carry/error state.
+    pub fn os9_call(&mut self, call: u16, result_mask: u32) -> Result<u32> {
+        let mut body = Vec::with_capacity(6);
+        body.extend_from_slice(&call.to_be_bytes());
+        body.extend_from_slice(&result_mask.to_be_bytes());
+        self.send_acknowledged(&request(OS9CALL, &body), "OS-9 call request")?;
+        self.read_response_header(OS9CALL)?;
+        let mut mask = [0; 4];
+        self.io.read_exact(&mut mask)?;
+        let checksum = self.read_notification()?;
+        let computed = [DLE, OS9CALL]
+            .into_iter()
+            .chain(mask)
+            .fold(0, |check, byte| check ^ byte);
+        if checksum != computed {
+            self.io.write_all(&[NAK])?;
+            self.io.flush()?;
+            return Err(Error::InvalidReadResponse);
+        }
+        self.io.write_all(&[ACK])?;
+        self.io.flush()?;
+        Ok(u32::from_be_bytes(mask))
     }
 
     /// Downloads host data to CD-i memory.
@@ -478,6 +589,34 @@ mod tests {
         assert_eq!(
             session.into_inner().output,
             [request(BAUDRATE, &rate), vec![ACK]].concat()
+        );
+    }
+
+    #[test]
+    fn full_stub_buffer_response_is_validated_and_acknowledged() {
+        let mut response = vec![ACK, DLE, BUFFER, 0, 0x40, 0, 0xdf, 0xbe, 0x10];
+        response.push(response.iter().skip(1).fold(0, |check, byte| check ^ byte));
+        let stream = TestIo::new(response);
+        let mut session = Session::new(stream);
+        assert_eq!(session.allocate_buffer(64).unwrap(), (64, 0x00df_be10));
+        assert_eq!(
+            session.into_inner().output,
+            [request(BUFFER, &[0, 0x40]), vec![ACK]].concat()
+        );
+    }
+
+    #[test]
+    fn full_stub_os9_call_returns_changed_register_mask() {
+        let mask = (REG_D0 | REG_CARRY).to_be_bytes();
+        let mut response = vec![ACK, DLE, OS9CALL];
+        response.extend(mask);
+        response.push(response.iter().skip(1).fold(0, |check, byte| check ^ byte));
+        let stream = TestIo::new(response);
+        let mut session = Session::new(stream);
+        assert_eq!(session.os9_call(0x84, 0).unwrap(), REG_D0 | REG_CARRY);
+        assert_eq!(
+            session.into_inner().output,
+            [request(OS9CALL, &[0, 0x84, 0, 0, 0, 0]), vec![ACK]].concat()
         );
     }
 }

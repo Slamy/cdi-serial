@@ -35,6 +35,7 @@ To upload a memory range from a running full `cdistub` to the host:
 ```
 
 Bootstrap a full Stub from its OS-9 module with `stub /path/to/cdistub`.
+With that Stub running, list an OS-9 directory with `dir /nvr`.
 
 For installation, full-Stub setup, logging, MiSTer, ARM cross-compilation, and
 troubleshooting, see the [manual](docs/MANUAL.md).

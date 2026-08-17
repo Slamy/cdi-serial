@@ -125,6 +125,19 @@ Global `--baud` only sets the connection speed for an already-running Stub.
 `--wait` is useful only if `cdi-serial` is started before a full Stub starts;
 the full Stub's `EM` activation marker is sent once.
 
+## Listing OS-9 directories
+
+`dir` is a read-only full-Stub operation. It opens an OS-9 directory and
+prints each entry's name and file-descriptor address:
+
+```sh
+cdi-serial --port /dev/ttyUSB0 dir /nvr
+```
+
+Use `--wait` only when launching `cdi-serial` before the full Stub announces
+itself. `--read-size` defaults to 256 bytes and must be a multiple of the
+32-byte OS-9 directory-entry size.
+
 ## MiSTer FPGA
 
 MiSTer's Linux serial connection is fixed at 115200 baud. Build with the
