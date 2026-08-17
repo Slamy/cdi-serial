@@ -61,8 +61,8 @@ Delete an unwanted OS-9 file with `delete /nvr/settings.bin`.
 On Linux, `mount /path/to/mountpoint` exposes `/cd` and `/nvr` through FUSE
 for ordinary tools such as `ls` and `cp`; it can create new files in `/nvr`.
 
-For installation, full-Stub setup, logging, FUSE mounting, MiSTer, ARM
-cross-compilation, and troubleshooting, see the [manual](docs/MANUAL.md).
+For installation, full-Stub setup, logging, FUSE mounting, MiSTer, Windows
+and ARM cross-compilation, and troubleshooting, see the [manual](docs/MANUAL.md).
 
 ## Credits and references
 

@@ -279,7 +279,30 @@ Use `--mister` to force 115200 baud for the entire session:
 MiSTer mode does not perform local protocol-directed baud changes. It cannot
 be combined with `--terminal-baud` or `--upload-baud`.
 
-## Cross-compiling for ARM Linux
+## Cross-compiling
+
+### Windows (x86_64)
+
+From Debian, Ubuntu, or a similar Linux distribution, install the MinGW-w64
+cross linker and Rust's 64-bit Windows GNU target:
+
+```sh
+sudo apt install gcc-mingw-w64-x86-64
+rustup target add x86_64-pc-windows-gnu
+CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc \
+  cargo build --release --target x86_64-pc-windows-gnu
+```
+
+The executable is
+`target/x86_64-pc-windows-gnu/release/cdi-serial.exe`. It supports the serial,
+Stub, memory, ROM, module, and OS-9 file commands on Windows; the Linux/Unix
+FUSE `mount` command is intentionally not included in the Windows build.
+
+Use a Windows serial device name such as `COM3`:
+
+```powershell
+cdi-serial.exe --port COM3 romlist
+```
 
 ### 32-bit ARMv7 (armv7l)
 

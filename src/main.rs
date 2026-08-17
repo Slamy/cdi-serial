@@ -1,16 +1,17 @@
 use std::{
     collections::HashMap,
-    ffi::OsStr,
     fs,
     io::{Read, Write},
-    sync::Mutex,
     time::Duration,
-    time::SystemTime,
 };
+
+#[cfg(unix)]
+use std::{ffi::OsStr, sync::Mutex, time::SystemTime};
 
 use anyhow::{Context, Result, bail};
 use cdi_serial::{REG_A0, REG_CARRY, REG_D0, REG_D1, Session};
 use clap::{Parser, Subcommand};
+#[cfg(unix)]
 use fuser::{
     Config, Errno, FileAttr, FileHandle, FileType, Filesystem, FopenFlags, Generation, INodeNo,
     LockOwner, MountOption, OpenAccMode, OpenFlags, ReplyAttr, ReplyCreate, ReplyData,
@@ -187,7 +188,8 @@ enum Command {
         #[arg(long)]
         end: bool,
     },
-    /// Mount /cd and /nvr using FUSE (Linux); only new files in /nvr can be written.
+    /// Mount /cd and /nvr using FUSE (Unix); only new files in /nvr can be written.
+    #[cfg(unix)]
     Mount {
         /// Existing empty host directory used as mount point.
         mountpoint: String,
@@ -1292,7 +1294,9 @@ fn delete_file<T: Read + Write>(
     Ok(())
 }
 
+#[cfg(unix)]
 const FUSE_TTL: Duration = Duration::from_secs(1);
+#[cfg(unix)]
 fn mount_owner_uid() -> u32 {
     // FUSE reports these attributes to the host kernel. Make the mounted view
     // owned by the user who started cdi-serial so its writable /nvr directory
@@ -1300,16 +1304,19 @@ fn mount_owner_uid() -> u32 {
     unsafe { libc::geteuid() }
 }
 
+#[cfg(unix)]
 fn mount_owner_gid() -> u32 {
     unsafe { libc::getegid() }
 }
 
+#[cfg(unix)]
 struct PendingFile {
     path: String,
     data: Vec<u8>,
     committed: bool,
 }
 
+#[cfg(unix)]
 struct CdiFuse {
     session: Mutex<Session<Box<dyn serialport::SerialPort>>>,
     verbose: bool,
@@ -1320,6 +1327,7 @@ struct CdiFuse {
     pending: Mutex<HashMap<u64, PendingFile>>,
 }
 
+#[cfg(unix)]
 impl CdiFuse {
     fn attr(ino: u64, directory: bool, size: u64) -> FileAttr {
         FileAttr {
@@ -1455,6 +1463,7 @@ impl CdiFuse {
         Ok(())
     }
 }
+#[cfg(unix)]
 impl Filesystem for CdiFuse {
     fn lookup(&self, _: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
         let name = name.to_string_lossy();
@@ -2124,6 +2133,7 @@ fn main() -> Result<()> {
             }
             println!("Done.");
         }
+        #[cfg(unix)]
         Command::Mount { mountpoint } => {
             let mut paths = HashMap::new();
             paths.insert(1, "/".to_owned());
