@@ -77,6 +77,26 @@ enum Command {
         #[arg(long, value_name = "FILE", requires = "terminal")]
         terminal_log: Option<String>,
     },
+    /// Read a memory range from a running full CD-i Stub into a local file.
+    Download {
+        /// Destination file. It is written only after a successful transfer.
+        file: String,
+        /// First memory address to read (hexadecimal, as in CD-i Link).
+        #[arg(long, value_parser = parse_address)]
+        address: u32,
+        /// Number of bytes to read.
+        #[arg(long)]
+        size: usize,
+        /// Maximum bytes per READ request (1 through 65535).
+        #[arg(long, default_value_t = 256)]
+        chunk_size: usize,
+        /// Wait for a full cdi_stub activation marker before reading.
+        #[arg(long)]
+        wait: bool,
+        /// Send END after the read completes.
+        #[arg(long)]
+        end: bool,
+    },
 }
 
 fn parse_address(text: &str) -> std::result::Result<u32, String> {
@@ -133,7 +153,7 @@ fn banner(bytes: &[u8]) -> String {
         .collect()
 }
 
-fn progress_bar(done: usize, total: usize) {
+fn progress_bar(label: &str, done: usize, total: usize) {
     const WIDTH: usize = 30;
     let done = done.min(total);
     let filled = if total == 0 {
@@ -143,7 +163,7 @@ fn progress_bar(done: usize, total: usize) {
     };
     let percent = if total == 0 { 100 } else { done * 100 / total };
     let bar = format!("{}{}", "#".repeat(filled), "-".repeat(WIDTH - filled));
-    eprint!("\rUploading [{bar}] {percent:>3}% ({done}/{total} bytes)");
+    eprint!("\r{label} [{bar}] {percent:>3}% ({done}/{total} bytes)");
     let _ = std::io::stderr().flush();
 }
 
@@ -236,10 +256,10 @@ fn main() -> Result<()> {
                 // receive path before issuing the first request.
                 std::thread::sleep(Duration::from_millis(500));
             }
-            progress_bar(0, image.len());
+            progress_bar("Uploading", 0, image.len());
             session
                 .upload_with_progress(*address, &image, *chunk_size, |done| {
-                    progress_bar(done, image.len())
+                    progress_bar("Uploading", done, image.len())
                 })
                 .context("upload failed")?;
             eprintln!();
@@ -274,6 +294,47 @@ fn main() -> Result<()> {
                     .transpose()?;
                 terminal(session.transport_mut(), log)?;
             }
+        }
+        Command::Download {
+            file,
+            address,
+            size,
+            chunk_size,
+            wait,
+            end,
+        } => {
+            if *size == 0 {
+                bail!("--size must be greater than zero");
+            }
+            if !(1..=u16::MAX as usize).contains(chunk_size) {
+                bail!("--chunk-size must be in 1..=65535");
+            }
+            if *wait {
+                eprintln!("Waiting for full CD-i Stub...");
+                let greeting = session
+                    .wait_for_stub(4096)
+                    .context("waiting for full CD-i Stub")?;
+                let greeting = banner(&greeting);
+                if greeting.trim().is_empty() {
+                    bail!(
+                        "ROM download subset is active; it cannot read memory. Start a full cdi_stub first"
+                    );
+                }
+                eprintln!("Stub active: {}", greeting.trim());
+            }
+            progress_bar("Downloading", 0, *size);
+            let data = session
+                .download_with_progress(*address, *size, *chunk_size, |done| {
+                    progress_bar("Downloading", done, *size)
+                })
+                .context("download failed")?;
+            eprintln!();
+            fs::write(file, data)
+                .with_context(|| format!("writing downloaded memory to {file}"))?;
+            if *end {
+                session.end().context("ending stub")?;
+            }
+            eprintln!("Done.");
         }
     }
     Ok(())

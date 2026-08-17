@@ -19,6 +19,7 @@ pub const WRITE: u8 = 0x01;
 pub const ADDRESS: u8 = 0x02;
 pub const EXECUTE: u8 = 0x04;
 pub const END: u8 = 0x08;
+pub const READ: u8 = 0x81;
 
 #[derive(Debug)]
 pub enum Error {
@@ -30,6 +31,7 @@ pub enum Error {
         attempts: u8,
     },
     InvalidChunkSize(usize),
+    InvalidReadResponse,
 }
 
 impl fmt::Display for Error {
@@ -47,6 +49,7 @@ impl fmt::Display for Error {
                 write!(f, "{operation} was rejected {attempts} times")
             }
             Self::InvalidChunkSize(size) => write!(f, "chunk size {size} must be in 1..=65535"),
+            Self::InvalidReadResponse => write!(f, "invalid response to read request"),
         }
     }
 }
@@ -179,6 +182,74 @@ impl<T: Read + Write> Session<T> {
             progress(transferred);
         }
         Ok(())
+    }
+
+    /// Reads up to 65535 bytes from the current address. This request is only
+    /// supported by a full `cdi_stub`, not the player's ROM download subset.
+    pub fn read(&mut self, size: usize) -> Result<Vec<u8>> {
+        if !(1..=u16::MAX as usize).contains(&size) {
+            return Err(Error::InvalidChunkSize(size));
+        }
+        self.send_acknowledged(&request(READ, &(size as u16).to_be_bytes()), "read request")?;
+
+        for _ in 0..=self.retries {
+            let marker = self.read_notification()?;
+            if marker == CAN {
+                return Err(Error::Cancelled);
+            }
+            if marker != DLE || self.read_notification()? != READ {
+                return Err(Error::InvalidReadResponse);
+            }
+            let mut size_bytes = [0; 2];
+            self.io.read_exact(&mut size_bytes)?;
+            if usize::from(u16::from_be_bytes(size_bytes)) != size {
+                return Err(Error::InvalidReadResponse);
+            }
+            let mut data = vec![0; size];
+            self.io.read_exact(&mut data)?;
+            let checksum = self.read_notification()?;
+            let computed = [DLE, READ]
+                .into_iter()
+                .chain(size_bytes)
+                .chain(data.iter().copied())
+                .fold(0, |check, byte| check ^ byte);
+            if checksum == computed {
+                self.io.write_all(&[ACK])?;
+                self.io.flush()?;
+                return Ok(data);
+            }
+            self.io.write_all(&[NAK])?;
+            self.io.flush()?;
+        }
+        Err(Error::RetryLimitExceeded {
+            operation: "read response",
+            attempts: self.retries + 1,
+        })
+    }
+
+    /// Reads `size` bytes starting at `address`, reporting the cumulative
+    /// byte count after each acknowledged response.
+    pub fn download_with_progress<F>(
+        &mut self,
+        address: u32,
+        size: usize,
+        chunk_size: usize,
+        mut progress: F,
+    ) -> Result<Vec<u8>>
+    where
+        F: FnMut(usize),
+    {
+        if !(1..=u16::MAX as usize).contains(&chunk_size) {
+            return Err(Error::InvalidChunkSize(chunk_size));
+        }
+        self.set_address(address)?;
+        let mut data = Vec::with_capacity(size);
+        while data.len() < size {
+            let count = (size - data.len()).min(chunk_size);
+            data.extend(self.read(count)?);
+            progress(data.len());
+        }
+        Ok(data)
     }
 
     /// Starts code at `address`. The target first returns ACK; a returning
@@ -323,6 +394,38 @@ mod tests {
         session
             .upload_with_progress(0x2000, &[1, 2, 3, 4, 5], 3, |bytes| progress.push(bytes))
             .unwrap();
+        assert_eq!(progress, vec![3, 5]);
+    }
+
+    #[test]
+    fn read_validates_response_and_acknowledges_it() {
+        let data = [0x12, 0x34, 0x56];
+        let mut response = vec![ACK, DLE, READ, 0, data.len() as u8];
+        response.extend(data);
+        response.push(response.iter().skip(1).fold(0, |check, byte| check ^ byte));
+        let stream = TestIo::new(response);
+        let mut session = Session::new(stream);
+        assert_eq!(session.read(3).unwrap(), data);
+        let stream = session.into_inner();
+        assert_eq!(stream.output, [request(READ, &[0, 3]), vec![ACK]].concat());
+    }
+
+    #[test]
+    fn download_sets_address_and_reports_progress() {
+        let mut first_response = vec![DLE, READ, 0, 3, 1, 2, 3];
+        first_response.push(first_response.iter().fold(0, |check, byte| check ^ byte));
+        let mut second_response = vec![DLE, READ, 0, 2, 4, 5];
+        second_response.push(second_response.iter().fold(0, |check, byte| check ^ byte));
+        let stream =
+            TestIo::new([vec![ACK, ACK], first_response, vec![ACK], second_response].concat());
+        let mut session = Session::new(stream);
+        let mut progress = Vec::new();
+        assert_eq!(
+            session
+                .download_with_progress(0x2000, 5, 3, |bytes| progress.push(bytes))
+                .unwrap(),
+            [1, 2, 3, 4, 5]
+        );
         assert_eq!(progress, vec![3, 5]);
     }
 }

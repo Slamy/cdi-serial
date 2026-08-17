@@ -71,6 +71,21 @@ application emits diagnostics at another speed, add (for example)
 To retain the raw terminal bytes as well as displaying them, add
 `--terminal-log cdi-debug.log`. The log file is opened in append mode.
 
+## Reading ROM or memory
+
+`download` reads an address range from a **running full `cdi_stub`**. The
+player's ROM download subset used by the direct application-loader workflow
+does not implement the `READ` request, so `--reset` must not be used for this.
+After starting or retaining a full stub, for example, read a 512 KiB ROM with:
+
+```sh
+./target/release/cdilink --port /dev/ttyUSB0 download cdi.rom \
+  --address 400000 --size 524288 --wait
+```
+
+Addresses are hexadecimal. The destination file is created only after the
+complete transfer succeeds; `--chunk-size` defaults to 256 bytes.
+
 ## Scope
 
 This initial tool implements the documented transfer core: `ADDRESS`, `WRITE`,
