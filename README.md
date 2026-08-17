@@ -34,6 +34,23 @@ To upload a memory range from a running full `cdistub` to the host:
 ./target/release/cdi-serial --port /dev/ttyUSB0 upload cdi.rom --address 400000 --size 524288
 ```
 
+Dump the standard 512 KiB system-ROM region and print its CRC-32:
+
+```sh
+./target/release/cdi-serial --port /dev/ttyUSB0 rom dump cdi.rom
+./target/release/cdi-serial --port /dev/ttyUSB0 rom verify cdi.rom
+```
+
+Inspect OS-9 ROM groups and loaded modules through a running full Stub:
+
+```sh
+./target/release/cdi-serial --port /dev/ttyUSB0 romlist
+./target/release/cdi-serial --port /dev/ttyUSB0 mod
+```
+
+`romlist` includes the VMPEG expansion ROM group when present. Both commands
+show module-based progress while they inspect live OS-9 headers.
+
 Bootstrap a full Stub from its OS-9 module with `stub /path/to/cdistub`.
 With that Stub running, list an OS-9 directory with `dir /nvr`.
 Copy an OS-9 file from the player without finding its memory address or size:

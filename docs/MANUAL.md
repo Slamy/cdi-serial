@@ -86,17 +86,6 @@ full Stub then remains active.
 cdi-serial --port /dev/ttyUSB0 upload cdi.rom --address 400000 --size 524288 --upload-baud 19200
 ```
 
-The original CD-i Link executable remains an optional legacy way to load its
-bundled `cdistub` and retain it with:
-
-```sh
-wine /path/to/cdilink.exe -port 5 -keep
-```
-
-Start or power on the player when CD-i Link waits for the Stub. On players
-with the ROM download subset, CD-i Link downloads its bundled `cdistub`
-automatically. `-keep` leaves that full Stub active after CD-i Link exits.
-
 For a player without the ROM subset, boot the `cdi_stub` disc. Some models
 need a model-specific Stub. Do not send Ctrl-C or use `--reset` after a full
 Stub is active.
@@ -124,6 +113,53 @@ cdi-serial --port /dev/ttyUSB0 upload cdi.rom --address 400000 --size 524288 --u
 Global `--baud` only sets the connection speed for an already-running Stub.
 `--wait` is useful only if `cdi-serial` is started before a full Stub starts;
 the full Stub's `EM` activation marker is sent once.
+
+## ROM utilities
+
+`rom dump` reads the standard CD-i system-ROM range (`0x400000`, 524,288 bytes)
+and reports a CRC-32 checksum:
+
+```sh
+cdi-serial --port /dev/ttyUSB0 rom dump cdi.rom
+```
+
+`rom verify` reads the same number of bytes from the player and compares every
+byte with a local dump. On mismatch it reports the first ROM address and both
+bytes, plus CRC-32 values for both images:
+
+```sh
+cdi-serial --port /dev/ttyUSB0 rom verify cdi.rom
+```
+
+Both operations require a running full Stub. Use `--address`, `--size` (dump
+only), `--chunk-size`, `--upload-baud`, `--wait`, and `--end` when needed.
+
+### ROM list
+
+`romlist` reads the OS-9 module directory and memory list to discover ROM
+module groups. It reports the CD-i system ROM and, when present, the VMPEG
+expansion ROM group:
+
+```sh
+cdi-serial --port /dev/ttyUSB0 romlist
+```
+
+It shows a module progress bar while inspecting headers. This is an OS-9
+visible ROM inventory, not a universal physical-ROM probe: firmware that is
+not represented by an OS-9 module cannot be discovered this way.
+
+### Loaded module list
+
+`mod` displays the active OS-9 modules directly from their live headers:
+address, size, owner, permissions, type, revision, edition, CRC, link count,
+and name.
+
+```sh
+cdi-serial --port /dev/ttyUSB0 mod
+```
+
+This command also shows a module progress bar while it reads headers, names,
+and CRC values from the player.
 
 ## Listing OS-9 directories
 
@@ -281,5 +317,6 @@ startup objects.
 
 The tool implements `ADDRESS`, `WRITE`, `READ`, `EXECUTE`, and `END`, including
 acknowledgements and retry on checksum rejection. It supports full-Stub
-bootstrap, directory listing, OS-9 file copy, and a FUSE view. It
-does not provide automatic player discovery or ROM-location detection.
+bootstrap, ROM and module inspection, directory listing, OS-9 file copy, and
+a FUSE view. It does not provide automatic player discovery or a universal
+physical-ROM probe.
