@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    name: Linux (${{ matrix.features || 'default' }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features: ["", fuse]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Install FUSE development files
+        if: matrix.features == 'fuse'
+        run: sudo apt-get update && sudo apt-get install --yes libfuse3-dev pkg-config
+      - name: Check formatting
+        if: matrix.features == ''
+        run: cargo fmt --check
+      - name: Test
+        run: cargo test --locked ${{ matrix.features && format('--features {0}', matrix.features) || '' }}
+      - name: Build release binary
+        run: cargo build --release --locked ${{ matrix.features && format('--features {0}', matrix.features) || '' }}
+
+  windows-cross:
+    name: Windows x86_64 cross-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+      - name: Install MinGW-w64 linker
+        run: sudo apt-get update && sudo apt-get install --yes gcc-mingw-w64-x86-64
+      - name: Build Windows executable
+        env:
+          CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER: x86_64-w64-mingw32-gcc
+        run: cargo build --release --locked --target x86_64-pc-windows-gnu
+      - name: Upload Windows executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: cdi-serial-windows-x86_64
+          path: target/x86_64-pc-windows-gnu/release/cdi-serial.exe
+          if-no-files-found: error

@@ -1,5 +1,6 @@
 /target/
 *.lock
+!Cargo.lock
 /cdilink.exe
 /cdi.rom
 /cdistub
