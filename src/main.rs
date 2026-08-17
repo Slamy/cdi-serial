@@ -14,7 +14,7 @@ const MISTER_BAUD: u32 = 115_200;
 #[command(
     name = "cdi-serial",
     version,
-    about = "Upload applications over the CD-i Stub serial protocol"
+    about = "Download applications and upload memory over the CD-i Stub serial protocol"
 )]
 struct Cli {
     /// Serial device, e.g. /dev/ttyUSB0 on Linux or COM3 on Windows.
@@ -42,8 +42,9 @@ enum Command {
         #[arg(long, default_value_t = 4096)]
         max_banner_bytes: usize,
     },
-    /// Write an application image to memory, optionally start it, then end the stub.
-    Upload {
+    /// Download an application image from the host to CD-i memory, optionally
+    /// start it, then end the stub.
+    Download {
         /// Image to transfer.
         file: String,
         /// Target memory address. CD-i Link addresses are hexadecimal; `8000`,
@@ -67,14 +68,14 @@ enum Command {
         /// Wait for the executed routine to return (EM notification).
         #[arg(long, requires = "execute")]
         wait_for_return: bool,
-        /// Send END after upload. On the built-in download subset this resumes boot.
+        /// Send END after download. On the built-in download subset this resumes boot.
         #[arg(long)]
         end: bool,
-        /// Keep the serial connection open after the upload and print CD-i
+        /// Keep the serial connection open after the download and print CD-i
         /// debug output. Exit with Ctrl-C.
         #[arg(long)]
         terminal: bool,
-        /// Serial speed to use after upload, immediately before entering
+        /// Serial speed to use after download, immediately before entering
         /// --terminal. Defaults to the current transfer speed.
         #[arg(long, requires = "terminal")]
         terminal_baud: Option<u32>,
@@ -83,27 +84,27 @@ enum Command {
         #[arg(long, value_name = "FILE", requires = "terminal")]
         terminal_log: Option<String>,
     },
-    /// Read a memory range from a running full CD-i Stub into a local file.
-    Download {
+    /// Upload a memory range from a running full CD-i Stub into a local file.
+    Upload {
         /// Destination file. It is written only after a successful transfer.
         file: String,
-        /// First memory address to read (hexadecimal, as in CD-i Link).
+        /// First CD-i memory address to upload (hexadecimal, as in CD-i Link).
         #[arg(long, value_parser = parse_address)]
         address: u32,
-        /// Number of bytes to read.
+        /// Number of bytes to upload.
         #[arg(long)]
         size: usize,
-        /// Maximum bytes per READ request (1 through 65535).
+        /// Maximum bytes per protocol READ request (1 through 65535).
         #[arg(long, default_value_t = 256)]
         chunk_size: usize,
-        /// Ask the full Stub to switch to this baud rate before reading. The
+        /// Ask the full Stub to switch to this baud rate before uploading. The
         /// Stub selects the highest supported rate not exceeding this value.
         #[arg(long)]
-        download_baud: Option<u32>,
-        /// Wait for a full cdi_stub activation marker before reading.
+        upload_baud: Option<u32>,
+        /// Wait for a full cdi_stub activation marker before uploading.
         #[arg(long)]
         wait: bool,
-        /// Send END after the read completes.
+        /// Send END after the upload completes.
         #[arg(long)]
         end: bool,
     },
@@ -213,7 +214,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     if cli.mister {
         match &cli.command {
-            Command::Upload {
+            Command::Download {
                 terminal_baud: Some(_),
                 ..
             } => {
@@ -221,19 +222,19 @@ fn main() -> Result<()> {
                     "--terminal-baud cannot be used with --mister; MiSTer mode is fixed at {MISTER_BAUD} baud"
                 );
             }
-            Command::Download {
-                download_baud: Some(_),
+            Command::Upload {
+                upload_baud: Some(_),
                 ..
             } => {
                 bail!(
-                    "--download-baud cannot be used with --mister; MiSTer mode is fixed at {MISTER_BAUD} baud"
+                    "--upload-baud cannot be used with --mister; MiSTer mode is fixed at {MISTER_BAUD} baud"
                 );
             }
             _ => {}
         }
         eprintln!("MiSTer mode: holding serial port at {MISTER_BAUD} baud.");
     }
-    let reset_requested = matches!(&cli.command, Command::Upload { reset: true, .. });
+    let reset_requested = matches!(&cli.command, Command::Download { reset: true, .. });
     if reset_requested {
         // Keep this as a separate open/write/close sequence. It intentionally
         // mirrors the established `stty; echo '\x03' > /dev/ttyUSB0; cdilink`
@@ -253,7 +254,7 @@ fn main() -> Result<()> {
                 .context("waiting for CD-i Stub")?;
             print!("{}", banner(&greeting));
         }
-        Command::Upload {
+        Command::Download {
             file,
             address,
             chunk_size,
@@ -291,12 +292,12 @@ fn main() -> Result<()> {
                 // receive path before issuing the first request.
                 std::thread::sleep(Duration::from_millis(500));
             }
-            progress_bar("Uploading", 0, image.len());
+            progress_bar("Downloading", 0, image.len());
             session
-                .upload_with_progress(*address, &image, *chunk_size, |done| {
-                    progress_bar("Uploading", done, image.len())
+                .download_with_progress(*address, &image, *chunk_size, |done| {
+                    progress_bar("Downloading", done, image.len())
                 })
-                .context("upload failed")?;
+                .context("download failed")?;
             eprintln!();
             if *execute {
                 session.execute(*address).context("execute failed")?;
@@ -330,12 +331,12 @@ fn main() -> Result<()> {
                 terminal(session.transport_mut(), log)?;
             }
         }
-        Command::Download {
+        Command::Upload {
             file,
             address,
             size,
             chunk_size,
-            download_baud,
+            upload_baud,
             wait,
             end,
         } => {
@@ -358,10 +359,10 @@ fn main() -> Result<()> {
                 }
                 eprintln!("Stub active: {}", greeting.trim());
             }
-            if let Some(baud) = download_baud {
+            if let Some(baud) = upload_baud {
                 let selected = session
                     .negotiate_baud_rate(*baud)
-                    .context("negotiating download baud rate")?;
+                    .context("negotiating upload baud rate")?;
                 if selected == 0 {
                     bail!("the running Stub does not support baud-rate switching");
                 }
@@ -369,14 +370,14 @@ fn main() -> Result<()> {
                     .transport_mut()
                     .set_baud_rate(selected)
                     .with_context(|| format!("switching local serial port to {selected} baud"))?;
-                eprintln!("Download baud rate: {selected}");
+                eprintln!("Upload baud rate: {selected}");
             }
-            progress_bar("Downloading", 0, *size);
+            progress_bar("Uploading", 0, *size);
             let data = session
-                .download_with_progress(*address, *size, *chunk_size, |done| {
-                    progress_bar("Downloading", done, *size)
+                .upload_with_progress(*address, *size, *chunk_size, |done| {
+                    progress_bar("Uploading", done, *size)
                 })
-                .context("download failed")?;
+                .context("upload failed")?;
             eprintln!();
             fs::write(file, data)
                 .with_context(|| format!("writing downloaded memory to {file}"))?;

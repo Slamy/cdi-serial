@@ -156,13 +156,14 @@ impl<T: Read + Write> Session<T> {
         self.send_acknowledged(&request(WRITE, &body), "write request")
     }
 
-    pub fn upload(&mut self, address: u32, data: &[u8], chunk_size: usize) -> Result<()> {
-        self.upload_with_progress(address, data, chunk_size, |_| {})
+    /// Downloads host data to CD-i memory.
+    pub fn download(&mut self, address: u32, data: &[u8], chunk_size: usize) -> Result<()> {
+        self.download_with_progress(address, data, chunk_size, |_| {})
     }
 
-    /// Uploads data and reports the cumulative acknowledged byte count after
+    /// Downloads host data and reports the cumulative acknowledged byte count after
     /// each successful WRITE request.
-    pub fn upload_with_progress<F>(
+    pub fn download_with_progress<F>(
         &mut self,
         address: u32,
         data: &[u8],
@@ -228,9 +229,9 @@ impl<T: Read + Write> Session<T> {
         })
     }
 
-    /// Reads `size` bytes starting at `address`, reporting the cumulative
+    /// Uploads `size` bytes starting at `address`, reporting the cumulative
     /// byte count after each acknowledged response.
-    pub fn download_with_progress<F>(
+    pub fn upload_with_progress<F>(
         &mut self,
         address: u32,
         size: usize,
@@ -408,10 +409,10 @@ mod tests {
     }
 
     #[test]
-    fn upload_splits_writes_and_advances_on_target() {
+    fn download_splits_writes_and_advances_on_target() {
         let stream = TestIo::new(vec![ACK, ACK, ACK]);
         let mut session = Session::new(stream);
-        session.upload(0x2000, &[1, 2, 3, 4, 5], 3).unwrap();
+        session.download(0x2000, &[1, 2, 3, 4, 5], 3).unwrap();
         let bytes = session.into_inner();
         let expected = [
             request(ADDRESS, &0x2000_u32.to_be_bytes()),
@@ -423,12 +424,12 @@ mod tests {
     }
 
     #[test]
-    fn upload_reports_only_acknowledged_chunks() {
+    fn download_reports_only_acknowledged_chunks() {
         let stream = TestIo::new(vec![ACK, ACK, ACK]);
         let mut session = Session::new(stream);
         let mut progress = Vec::new();
         session
-            .upload_with_progress(0x2000, &[1, 2, 3, 4, 5], 3, |bytes| progress.push(bytes))
+            .download_with_progress(0x2000, &[1, 2, 3, 4, 5], 3, |bytes| progress.push(bytes))
             .unwrap();
         assert_eq!(progress, vec![3, 5]);
     }
@@ -447,7 +448,7 @@ mod tests {
     }
 
     #[test]
-    fn download_sets_address_and_reports_progress() {
+    fn upload_sets_address_and_reports_progress() {
         let mut first_response = vec![DLE, READ, 0, 3, 1, 2, 3];
         first_response.push(first_response.iter().fold(0, |check, byte| check ^ byte));
         let mut second_response = vec![DLE, READ, 0, 2, 4, 5];
@@ -458,7 +459,7 @@ mod tests {
         let mut progress = Vec::new();
         assert_eq!(
             session
-                .download_with_progress(0x2000, 5, 3, |bytes| progress.push(bytes))
+                .upload_with_progress(0x2000, 5, 3, |bytes| progress.push(bytes))
                 .unwrap(),
             [1, 2, 3, 4, 5]
         );

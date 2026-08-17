@@ -2,7 +2,7 @@
 name = "cdi-serial"
 version = "0.1.0"
 edition = "2024"
-description = "Upload applications to Philips CD-i players using the CD-i Stub protocol"
+description = "Download applications to Philips CD-i players using the CD-i Stub protocol"
 license = "MIT"
 
 [dependencies]

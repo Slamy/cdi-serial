@@ -2,10 +2,10 @@
 
 `cdi-serial` is a tool to assist CD-i homebrew developers
 
-* Can upload an application to the machine for execution
-* Can act as a output terminal after upload for reading debug prints
+* Can download an application to the machine for execution
+* Can act as a output terminal after download for reading debug prints
 * Portable and written in Rust
-* Is compatible with the full stub from cdilink for memory download
+* Is compatible with the full stub from cdilink for memory upload
 
 The code is written using the AI tool Codex with `GPT 5.6 Terra`. The functionality has been tested and reviewed by human hand.
 The implementation is based on the public `cdistub-0.5.1` protocol and also
@@ -37,13 +37,13 @@ Ensure that `~/.cargo/bin` is in `PATH`, then verify the installation:
 cdi-serial --help
 ```
 
-## Uploading an application
+## Downloading an application
 
 For a development image that is loaded through the player's built-in download
 subset, connect the CD-i null-modem cable and run:
 
 ```sh
-./target/release/cdi-serial --port /dev/ttyUSB0 upload app.bin \
+./target/release/cdi-serial --port /dev/ttyUSB0 download app.bin \
   --address 8000 --end --reset
 ```
 
@@ -55,7 +55,7 @@ a safe RAM address: that varies between CD-i models and images.
 For an OS-9 `play` module loaded through the player's built-in download subset,
 the practical equivalent of `cdilink -n -a 8000 -d app -e` is the command above.
 `--reset` sends the Ctrl-C byte using a separate open/write/close cycle, then
-waits for the download subset activation notification before uploading—matching
+waits for the download subset activation notification before downloading—matching
 the development script and CD-i Link's default `-wait` behavior. Do not use
 `--execute`; `--end` hands the module to normal boot processing. If you have
 already reset the player yourself, use `--wait` instead.
@@ -74,12 +74,12 @@ default 256-byte writes match the working CD-i Link trace.
 
 ## Reading application debug output
 
-Add `--terminal` to keep the serial connection open after the upload and copy
+Add `--terminal` to keep the serial connection open after the download and copy
 incoming serial bytes to standard output. This is the equivalent of CD-i Link's
 `-terminal` mode and is useful with `--end`, once the application starts:
 
 ```sh
-./target/release/cdi-serial --port /dev/ttyUSB0 upload app.bin \
+./target/release/cdi-serial --port /dev/ttyUSB0 download app.bin \
   --address 8000 --end --reset --terminal
 ```
 
@@ -94,7 +94,7 @@ To retain the raw terminal bytes as well as displaying them, add
 ### Starting the full stub
 
 The current tool deliberately does not yet install a full stub. If you have
-the original CD-i Link executable, use it once to upload its bundled `cdistub`
+the original CD-i Link executable, use it once to download its bundled `cdistub`
 and leave it running:
 
 ```sh
@@ -102,7 +102,7 @@ wine /path/to/cdilink.exe -port 5 -keep
 ```
 
 Start or power on the player when CD-i Link says it is waiting for the stub.
-On players that support the ROM download subset, CD-i Link uploads `cdistub`
+On players that support the ROM download subset, CD-i Link downloads `cdistub`
 automatically. `-keep` is important: it prevents CD-i Link from sending `END`,
 so the full stub remains active after the program exits.
 
@@ -111,26 +111,26 @@ Some models need a model-specific stub; consult the original CD-i Stub package
 for the appropriate image. Do not send Ctrl-C or use this tool's `--reset`
 after the full stub is running.
 
-### Reading a memory range
+### Uploading a memory range
 
 The full stub normally begins at 9600 baud. Once it is active, read a 512 KiB
-ROM with:
+ROM to the host with:
 
 ```sh
-./target/release/cdi-serial --port /dev/ttyUSB0 download cdi.rom \
+./target/release/cdi-serial --port /dev/ttyUSB0 upload cdi.rom \
   --address 400000 --size 524288
 ```
 
 Addresses are hexadecimal. The destination file is created only after the
 complete transfer succeeds; `--chunk-size` defaults to 256 bytes.
 
-To speed up a read, request a higher full-Stub transfer rate. The Stub chooses
+To speed up an upload, request a higher full-Stub transfer rate. The Stub chooses
 the highest speed it supports that does not exceed the requested value, then
 the client switches its serial port to the selected rate:
 
 ```sh
-./target/release/cdi-serial --port /dev/ttyUSB0 download cdi.rom \
-  --address 400000 --size 524288 --download-baud 19200
+./target/release/cdi-serial --port /dev/ttyUSB0 upload cdi.rom \
+  --address 400000 --size 524288 --upload-baud 19200
 ```
 
 This is a negotiated switch, unlike the global `--baud` option, which only
@@ -214,7 +214,7 @@ On the MiSTer, the baud rate to Linux is always 115200 and cannot be changed!
 Use it like so.
 
 ```sh
-./cdi-serial --port /dev/ttyS1 --mister upload app.bin \
+./cdi-serial --port /dev/ttyS1 --mister download app.bin \
   --address 8000 --end --reset
 ```
 
@@ -224,19 +224,19 @@ For a MiSTer setup that requires a fixed 115200-baud serial connection, add
 `--mister` before the subcommand:
 
 ```sh
-./target/release/cdi-serial --port /dev/ttyUSB0 --mister upload app.bin \
+./target/release/cdi-serial --port /dev/ttyUSB0 --mister download app.bin \
   --address 8000 --end --reset
 ```
 
 This forces the local serial port to 115200 baud from open through completion.
 In particular, it prevents the normal direct-loader transition to 19200 baud
 and does not follow any protocol-directed local baud-rate change. Do not use
-`--terminal-baud` or `--download-baud` with `--mister`.
+`--terminal-baud` or `--upload-baud` with `--mister`.
 
 The terminal can be used as well
 
 ```sh
-./target/release/cdi-serial --port /dev/ttyUSB0 --mister upload app.bin \
+./target/release/cdi-serial --port /dev/ttyUSB0 --mister download app.bin \
   --address 8000 --end --reset --terminal
 ```
 
