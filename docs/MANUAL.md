@@ -170,6 +170,17 @@ that is open or not writable. An `E$FNA` (“file not accessible”) response
 means OS-9 itself cannot open the directory entry; `delete` cannot repair or
 remove such a damaged entry.
 
+## Hardware integrity test
+
+The opt-in integration test verifies a complete binary round trip: it writes a
+1,280-byte payload to a new uniquely named `/nvr` file, reads it back, compares
+every byte, then deletes that test file. It requires a running full Stub and is
+ignored by default because it touches real hardware:
+
+```sh
+CDI_SERIAL_PORT=/dev/ttyUSB0 cargo test --test serial_integration -- --ignored
+```
+
 ## FUSE mount (Linux)
 
 With a full Stub running, `mount` presents `/cd` and `/nvr` as a host
