@@ -141,6 +141,56 @@ is started manually (for example, from a `cdi_stub` disc). A full stub emits
 its activation marker once; CD-i Link consumes that marker while installing
 the stub with `-keep`.
 
+## Cross-compiling for 32-bit ARMv7 Linux (armv7l)
+
+```sh
+rustup target add armv7-unknown-linux-gnueabihf
+sudo apt install gcc-arm-linux-gnueabihf libc6-dev-armhf-cross
+```
+
+Build a release executable:
+
+```sh
+CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc \
+  cargo build --release --target armv7-unknown-linux-gnueabihf
+```
+
+The output is:
+
+```text
+target/armv7-unknown-linux-gnueabihf/release/cdi-serial
+```
+
+## Cross-compiling for 64-bit ARM Linux (aarch64)
+
+Install Rust's target standard library and a GNU aarch64 cross-linker. On
+Debian or Ubuntu:
+
+```sh
+rustup target add aarch64-unknown-linux-gnu
+sudo apt install gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+```
+
+Build the release executable with the appropriate linker selected for this one
+command:
+
+```sh
+CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+  cargo build --release --target aarch64-unknown-linux-gnu
+```
+
+The resulting executable is:
+
+```text
+target/aarch64-unknown-linux-gnu/release/cdi-serial
+```
+
+You can then omit the environment variable:
+
+```sh
+cargo build --release --target aarch64-unknown-linux-gnu
+```
+
 ## Credits and references
 
 This is an independent Rust implementation. It does not include or redistribute
