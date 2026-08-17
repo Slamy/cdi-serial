@@ -40,6 +40,7 @@ Copy an OS-9 file from the player without finding its memory address or size:
 `get /cd/copyright copyright`.
 Copy a new host file to writable NVR storage with
 `put settings.bin /nvr/settings.bin`.
+Delete an unwanted OS-9 file with `delete /nvr/settings.bin`.
 On Linux, `mount /path/to/mountpoint` exposes `/cd` and `/nvr` through FUSE
 for ordinary tools such as `ls` and `cp`; it can create new files in `/nvr`.
 
@@ -61,6 +62,10 @@ CD-i Link, CD-i Stub, or any CD-i ROM image.
 - **CD-i Link 0.5.1** — created by **CD-i Fan**. Its `cdilink.txt` informed
   full-Stub bootstrap, `-keep`, terminal mode, and ROM-reading behavior.
   [CD-i Link project page](https://www.cdiemu.org/site/cdilink.htm)
+
+- **Microware OS-9 Technical Manual** — the CD-i SDK copy
+  (`DOC/PDF/os9k_tech.pdf`) documents the `I$Delete` (`0x87`) path-list call
+  used by the `delete` command.
 
 - **Hardware interoperability observations** — based on a serial system-call
   trace of the original CD-i Link executable. It established the ROM

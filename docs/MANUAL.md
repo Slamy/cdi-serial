@@ -159,6 +159,17 @@ cdi-serial --port /dev/ttyUSB0 put settings.bin /nvr/settings.bin
 The destination must not already exist. `put` uses OS-9 `I$Create` followed
 by `I$Write`; it does not overwrite existing files.
 
+To permanently delete one OS-9 file through the full Stub:
+
+```sh
+cdi-serial --port /dev/ttyUSB0 delete /nvr/old-settings.bin
+```
+
+`delete` requires an absolute path and cannot be undone. OS-9 rejects a file
+that is open or not writable. An `E$FNA` (“file not accessible”) response
+means OS-9 itself cannot open the directory entry; `delete` cannot repair or
+remove such a damaged entry.
+
 ## FUSE mount (Linux)
 
 With a full Stub running, `mount` presents `/cd` and `/nvr` as a host

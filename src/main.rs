@@ -148,6 +148,15 @@ enum Command {
         #[arg(long)]
         wait: bool,
     },
+    /// Delete an OS-9 file on the CD-i player through a running full CD-i Stub.
+    Delete {
+        /// Absolute OS-9 path to the file to delete, for example
+        /// /nvr/old-settings.bin.
+        remote_path: String,
+        /// Wait for the full Stub activation marker before deleting.
+        #[arg(long)]
+        wait: bool,
+    },
     /// Mount /cd and /nvr using FUSE (Linux); only new files in /nvr can be written.
     Mount {
         /// Existing empty host directory used as mount point.
@@ -297,6 +306,7 @@ fn terminal<T: Read>(io: &mut T, mut log: Option<fs::File>) -> Result<()> {
 
 const OS9_I_OPEN: u16 = 0x84;
 const OS9_I_CREATE: u16 = 0x83;
+const OS9_I_DELETE: u16 = 0x87;
 const OS9_I_READ: u16 = 0x89;
 const OS9_I_WRITE: u16 = 0x8a;
 const OS9_I_CLOSE: u16 = 0x8f;
@@ -646,6 +656,48 @@ fn put_file<T: Read + Write>(
     let close_result = session.os9_call(OS9_I_CLOSE, 0);
     result?;
     close_result.context("closing OS-9 destination file")?;
+    Ok(())
+}
+
+fn delete_file<T: Read + Write>(session: &mut Session<T>, remote_path: &str) -> Result<()> {
+    if !remote_path.starts_with('/') {
+        bail!("delete requires an absolute OS-9 path, such as /nvr/old-file");
+    }
+    if remote_path.as_bytes().contains(&0) {
+        bail!("path to delete must not contain a NUL byte");
+    }
+    session
+        .set_address(0)
+        .context("initializing full Stub address")?;
+    let mut path_bytes = remote_path.as_bytes().to_vec();
+    path_bytes.push(0);
+    let (path_buffer_size, path_buffer) = session
+        .allocate_buffer(path_bytes.len())
+        .context("allocating OS-9 delete-path buffer")?;
+    if path_buffer_size < path_bytes.len() {
+        bail!("full Stub allocated an unexpectedly small OS-9 delete-path buffer");
+    }
+    session
+        .write(&path_bytes)
+        .context("writing OS-9 delete path")?;
+    // OS-9 ignores D0's access mode when A0 contains an absolute pathlist,
+    // but supplying update access also matches the documented I$Delete call.
+    session
+        .set_registers(REG_D0 | REG_A0, &[OS9_FILE_READ_WRITE, path_buffer])
+        .context("setting registers for OS-9 file delete")?;
+    let delete_result = session
+        .os9_call(OS9_I_DELETE, 0)
+        .context("deleting OS-9 file")?;
+    if delete_result & REG_CARRY != 0 {
+        session
+            .select_registers(REG_D1)
+            .context("selecting OS-9 delete error register")?;
+        let error = session
+            .read(4)
+            .context("reading OS-9 delete error register")?;
+        let error = u32::from_be_bytes(error.try_into().unwrap());
+        bail!("OS-9 could not delete {remote_path:?} (error 0x{error:08X})");
+    }
     Ok(())
 }
 
@@ -1296,6 +1348,21 @@ fn main() -> Result<()> {
                 .with_context(|| format!("reading host source file {local_file}"))?;
             put_file(&mut session, &data, remote_path, *chunk_size)?;
             eprintln!("Copied {} bytes to {remote_path}.", data.len());
+        }
+        Command::Delete { remote_path, wait } => {
+            if *wait {
+                eprintln!("Waiting for full CD-i Stub...");
+                let greeting = session
+                    .wait_for_stub(4096)
+                    .context("waiting for full CD-i Stub")?;
+                let greeting = banner(&greeting);
+                if greeting.trim().is_empty() {
+                    bail!("ROM download subset is active; file deletion requires a full cdi_stub");
+                }
+                eprintln!("Stub active: {}", greeting.trim());
+            }
+            delete_file(&mut session, remote_path)?;
+            eprintln!("Deleted {remote_path}.");
         }
         Command::Mount { mountpoint } => {
             let mut paths = HashMap::new();
