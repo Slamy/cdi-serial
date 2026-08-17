@@ -22,8 +22,7 @@ cargo build --release
 Download an OS-9 `play` module to a player through its built-in download subset:
 
 ```sh
-./target/release/cdi-serial --port /dev/ttyUSB0 download app.bin \
-  --address 8000 --end --reset
+./target/release/cdi-serial --port /dev/ttyUSB0 download app.bin --address 8000 --end --reset
 ```
 
 `8000` is hexadecimal, as in CD-i Link. Add `--terminal` to display serial
@@ -32,9 +31,10 @@ debug output after the application starts.
 To upload a memory range from a running full `cdistub` to the host:
 
 ```sh
-./target/release/cdi-serial --port /dev/ttyUSB0 upload cdi.rom \
-  --address 400000 --size 524288
+./target/release/cdi-serial --port /dev/ttyUSB0 upload cdi.rom --address 400000 --size 524288
 ```
+
+Bootstrap a full Stub from its OS-9 module with `stub /path/to/cdistub`.
 
 For installation, full-Stub setup, logging, MiSTer, ARM cross-compilation, and
 troubleshooting, see the [manual](docs/MANUAL.md).

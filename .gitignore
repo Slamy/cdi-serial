@@ -2,3 +2,5 @@
 *.lock
 /cdilink.exe
 /cdi.rom
+/cdistub
+/cdi_stub

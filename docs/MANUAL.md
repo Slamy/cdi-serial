@@ -31,8 +31,7 @@ upload.
 For a development image loaded through the player's built-in download subset:
 
 ```sh
-cdi-serial --port /dev/ttyUSB0 download app.bin \
-  --address 8000 --end --reset
+cdi-serial --port /dev/ttyUSB0 download app.bin --address 8000 --end --reset
 ```
 
 Addresses are hexadecimal even without a prefix: `8000`, `0x8000`, and `$8000`
@@ -58,8 +57,7 @@ Add `--terminal` after a download to keep the port open and display incoming
 debug output until Ctrl-C:
 
 ```sh
-cdi-serial --port /dev/ttyUSB0 download app.bin \
-  --address 8000 --end --reset --terminal
+cdi-serial --port /dev/ttyUSB0 download app.bin --address 8000 --end --reset --terminal
 ```
 
 The terminal is receive-only. It normally stays at the post-bootstrap 19200
@@ -73,8 +71,23 @@ range requires a running full `cdistub`.
 
 ### Starting a full Stub
 
-The current tool does not install a full stub. To use the original CD-i Link
-once for this purpose:
+The `cdistub` program is an OS-9 `play` module. Obtain it from the
+[CD-i Stub distribution](https://www.cdiemu.org/site/cdilink.htm), then run:
+
+```sh
+cdi-serial --port /dev/ttyUSB0 stub /path/to/cdistub
+```
+
+`stub` resets the player, waits for the ROM download subset, downloads the
+module to `0x8000`, and sends `END` so normal boot processing starts it. The
+full Stub then remains active.
+
+```sh
+cdi-serial --port /dev/ttyUSB0 upload cdi.rom --address 400000 --size 524288 --upload-baud 19200
+```
+
+The original CD-i Link executable remains an optional legacy way to load its
+bundled `cdistub` and retain it with:
 
 ```sh
 wine /path/to/cdilink.exe -port 5 -keep
@@ -94,8 +107,7 @@ The full Stub normally begins at 9600 baud. To upload a 512 KiB ROM to the
 host:
 
 ```sh
-cdi-serial --port /dev/ttyUSB0 upload cdi.rom \
-  --address 400000 --size 524288
+cdi-serial --port /dev/ttyUSB0 upload cdi.rom --address 400000 --size 524288
 ```
 
 The destination file is written only after the full transfer succeeds. The
@@ -106,8 +118,7 @@ selects the highest supported rate at or below the requested value, then the
 client changes its local serial rate to match:
 
 ```sh
-cdi-serial --port /dev/ttyUSB0 upload cdi.rom \
-  --address 400000 --size 524288 --upload-baud 19200
+cdi-serial --port /dev/ttyUSB0 upload cdi.rom --address 400000 --size 524288 --upload-baud 19200
 ```
 
 Global `--baud` only sets the connection speed for an already-running Stub.
@@ -130,8 +141,7 @@ scp target/armv7-unknown-linux-gnueabihf/release/cdi-serial root@mister:/media/f
 Use `--mister` to force 115200 baud for the entire session:
 
 ```sh
-./cdi-serial --port /dev/ttyS1 --mister download app.bin \
-  --address 8000 --end --reset --terminal
+./cdi-serial --port /dev/ttyS1 --mister download app.bin --address 8000 --end --reset --terminal
 ```
 
 MiSTer mode does not perform local protocol-directed baud changes. It cannot
@@ -164,13 +174,7 @@ CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
   cargo build --release --target aarch64-unknown-linux-gnu
 ```
 
-Output: `target/aarch64-unknown-linux-gnu/release/cdi-serial`. For repeated
-builds, add this to `.cargo/config.toml`:
-
-```toml
-[target.aarch64-unknown-linux-gnu]
-linker = "aarch64-linux-gnu-gcc"
-```
+Output: `target/aarch64-unknown-linux-gnu/release/cdi-serial`.
 
 These are dynamically linked GNU/Linux binaries; the target needs compatible
 glibc. Rust distributes the target standard libraries through `rustup`; the

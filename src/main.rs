@@ -84,6 +84,19 @@ enum Command {
         #[arg(long, value_name = "FILE", requires = "terminal")]
         terminal_log: Option<String>,
     },
+    /// Download an OS-9 full Stub module, then start it through the ROM
+    /// download subset.
+    Stub {
+        /// Path to the cdistub OS-9 `play` module.
+        file: String,
+        /// Target memory address (hexadecimal). The standard cdistub module
+        /// uses 0x8000.
+        #[arg(long, default_value = "8000", value_parser = parse_address)]
+        address: u32,
+        /// Maximum bytes per WRITE request (1 through 65535).
+        #[arg(long, default_value_t = 256)]
+        chunk_size: usize,
+    },
     /// Upload a memory range from a running full CD-i Stub into a local file.
     Upload {
         /// Destination file. It is written only after a successful transfer.
@@ -234,7 +247,10 @@ fn main() -> Result<()> {
         }
         eprintln!("MiSTer mode: holding serial port at {MISTER_BAUD} baud.");
     }
-    let reset_requested = matches!(&cli.command, Command::Download { reset: true, .. });
+    let reset_requested = matches!(
+        &cli.command,
+        Command::Download { reset: true, .. } | Command::Stub { .. }
+    );
     if reset_requested {
         // Keep this as a separate open/write/close sequence. It intentionally
         // mirrors the established `stty; echo '\x03' > /dev/ttyUSB0; cdilink`
@@ -330,6 +346,42 @@ fn main() -> Result<()> {
                     .transpose()?;
                 terminal(session.transport_mut(), log)?;
             }
+        }
+        Command::Stub {
+            file,
+            address,
+            chunk_size,
+        } => {
+            if !(1..=u16::MAX as usize).contains(chunk_size) {
+                bail!("--chunk-size must be in 1..=65535");
+            }
+            let image =
+                fs::read(file).with_context(|| format!("cannot read Stub module {file}"))?;
+            eprintln!("Waiting for CD-i download subset...");
+            let greeting = session
+                .wait_for_stub(4096)
+                .context("waiting for CD-i Stub/download subset")?;
+            let greeting = banner(&greeting);
+            if !greeting.trim().is_empty() {
+                bail!("a full Stub is already active; do not bootstrap another one");
+            }
+            eprintln!("Download subset active.");
+            if !cli.mister {
+                session
+                    .transport_mut()
+                    .set_baud_rate(19_200)
+                    .context("switching to 19200 baud after download-subset handshake")?;
+            }
+            std::thread::sleep(Duration::from_millis(500));
+            progress_bar("Downloading Stub", 0, image.len());
+            session
+                .download_with_progress(*address, &image, *chunk_size, |done| {
+                    progress_bar("Downloading Stub", done, image.len())
+                })
+                .context("Stub download failed")?;
+            eprintln!();
+            session.end().context("starting full Stub")?;
+            eprintln!("Full Stub started. Use `upload` to read CD-i memory.");
         }
         Command::Upload {
             file,
