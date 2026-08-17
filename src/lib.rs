@@ -20,6 +20,7 @@ pub const ADDRESS: u8 = 0x02;
 pub const EXECUTE: u8 = 0x04;
 pub const END: u8 = 0x08;
 pub const READ: u8 = 0x81;
+pub const BAUDRATE: u8 = 0x80;
 
 #[derive(Debug)]
 pub enum Error {
@@ -252,6 +253,41 @@ impl<T: Read + Write> Session<T> {
         Ok(data)
     }
 
+    /// Asks a full Stub for the highest supported baud rate not exceeding
+    /// `desired`. The caller must switch its local serial port to the returned
+    /// non-zero rate immediately after this succeeds.
+    pub fn negotiate_baud_rate(&mut self, desired: u32) -> Result<u32> {
+        self.send_acknowledged(
+            &request(BAUDRATE, &desired.to_be_bytes()),
+            "baud-rate request",
+        )?;
+        let marker = self.read_notification()?;
+        if marker == CAN {
+            return Err(Error::Cancelled);
+        }
+        if marker != DLE || self.read_notification()? != BAUDRATE {
+            return Err(Error::InvalidReadResponse);
+        }
+        let mut rate = [0; 4];
+        self.io.read_exact(&mut rate)?;
+        let checksum = self.read_notification()?;
+        let computed = [DLE, BAUDRATE]
+            .into_iter()
+            .chain(rate)
+            .fold(0, |check, byte| check ^ byte);
+        if checksum != computed {
+            self.io.write_all(&[NAK])?;
+            self.io.flush()?;
+            return Err(Error::RetryLimitExceeded {
+                operation: "baud-rate response",
+                attempts: 1,
+            });
+        }
+        self.io.write_all(&[ACK])?;
+        self.io.flush()?;
+        Ok(u32::from_be_bytes(rate))
+    }
+
     /// Starts code at `address`. The target first returns ACK; a returning
     /// stub application will later send EM.
     pub fn execute(&mut self, address: u32) -> Result<()> {
@@ -427,5 +463,20 @@ mod tests {
             [1, 2, 3, 4, 5]
         );
         assert_eq!(progress, vec![3, 5]);
+    }
+
+    #[test]
+    fn baud_rate_is_negotiated_before_local_port_switch() {
+        let rate = 38_400_u32.to_be_bytes();
+        let mut response = vec![ACK, DLE, BAUDRATE];
+        response.extend(rate);
+        response.push(response.iter().skip(1).fold(0, |check, byte| check ^ byte));
+        let stream = TestIo::new(response);
+        let mut session = Session::new(stream);
+        assert_eq!(session.negotiate_baud_rate(38_400).unwrap(), 38_400);
+        assert_eq!(
+            session.into_inner().output,
+            [request(BAUDRATE, &rate), vec![ACK]].concat()
+        );
     }
 }

@@ -5,12 +5,12 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use cdilink::Session;
+use cdi_serial::Session;
 use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "cdilink",
+    name = "cdi-serial",
     version,
     about = "Upload applications over the CD-i Stub serial protocol"
 )]
@@ -90,6 +90,10 @@ enum Command {
         /// Maximum bytes per READ request (1 through 65535).
         #[arg(long, default_value_t = 256)]
         chunk_size: usize,
+        /// Ask the full Stub to switch to this baud rate before reading. The
+        /// Stub selects the highest supported rate not exceeding this value.
+        #[arg(long)]
+        download_baud: Option<u32>,
         /// Wait for a full cdi_stub activation marker before reading.
         #[arg(long)]
         wait: bool,
@@ -300,6 +304,7 @@ fn main() -> Result<()> {
             address,
             size,
             chunk_size,
+            download_baud,
             wait,
             end,
         } => {
@@ -321,6 +326,19 @@ fn main() -> Result<()> {
                     );
                 }
                 eprintln!("Stub active: {}", greeting.trim());
+            }
+            if let Some(baud) = download_baud {
+                let selected = session
+                    .negotiate_baud_rate(*baud)
+                    .context("negotiating download baud rate")?;
+                if selected == 0 {
+                    bail!("the running Stub does not support baud-rate switching");
+                }
+                session
+                    .transport_mut()
+                    .set_baud_rate(selected)
+                    .with_context(|| format!("switching local serial port to {selected} baud"))?;
+                eprintln!("Download baud rate: {selected}");
             }
             progress_bar("Downloading", 0, *size);
             let data = session

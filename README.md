@@ -1,26 +1,49 @@
-# cdilink-rs
+# cdi-serial
 
-`cdilink-rs` is a Rust command-line uploader for the CD-i **Stub** protocol
-used by CD-i Link. It uploads an image into CD-i memory, and can start it or
-finish the stub session.
+`cdi-serial` is a tool to assist CD-i homebrew developers
 
-The protocol implementation is based on the public `cdistub-0.5.1` protocol
-definition: requests start with `SOH`, use big-endian sizes/addresses, carry an
-XOR check byte, and are retried after `NAK`.
+* Can upload an application to the machine for execution
+* Can act as a output terminal after upload for reading debug prints
+* Portable and written in Rust
+* Is compatible with the full stub from cdilink for memory download
+
+The code is written using the AI tool Codex with `GPT 5.6 Terra`. The functionality has been tested and reviewed by human hand.
+The implementation is based on the public `cdistub-0.5.1` protocol and also
+reverse engineering efforts of [cdilink.exe](https://www.cdiemu.org/site/cdilink.htm)
 
 ## Build
+
+Install a current stable [Rust toolchain](https://www.rust-lang.org/tools/install),
+then clone this repository and build a release binary:
 
 ```sh
 cargo build --release
 ```
 
-## Upload an application
+The executable is then `./target/release/cdi-serial`.
+
+## Install
+
+To install the executable into Cargo's binary directory (usually
+`~/.cargo/bin`), run this from the repository root:
+
+```sh
+cargo install --path .
+```
+
+Ensure that `~/.cargo/bin` is in `PATH`, then verify the installation:
+
+```sh
+cdi-serial --help
+```
+
+## Uploading an application
 
 For a development image that is loaded through the player's built-in download
 subset, connect the CD-i null-modem cable and run:
 
 ```sh
-./target/release/cdilink --port /dev/ttyUSB0 upload app.bin \
+./target/release/cdi-serial --port /dev/ttyUSB0 upload app.bin \
   --address 8000 --end --reset
 ```
 
@@ -41,13 +64,10 @@ The player's ROM download subset starts with `SOH` (`0x01`); the client replies
 with `ACK` (`0x06`) at 9600 baud and switches to 19200 baud before transfer. A
 full `cdi_stub` signals with `EM` (`0x19`) instead.
 
-The client explicitly asserts DTR and RTS. The documented CD-i null-modem cable
-feeds those host control lines into the player's CTS/RTS inputs, and some USB
-serial adapters otherwise leave RTS low.
-
-`--wait` waits for a full stub's `EM` activation notification; use it only when
-attaching to a running full `cdi_stub`. `--execute` is a separate low-level
-operation, and `--wait-for-return` is suitable only when that routine returns.
+`--wait` waits for a full stub's one-time `EM` activation notification; use it
+only when this tool is already waiting before the stub starts. `--execute` is a
+separate low-level operation, and `--wait-for-return` is suitable only when
+that routine returns.
 
 The direct-loader handshake starts at 9600 baud, then uses 19200 baud. The
 default 256-byte writes match the working CD-i Link trace.
@@ -59,7 +79,7 @@ incoming serial bytes to standard output. This is the equivalent of CD-i Link's
 `-terminal` mode and is useful with `--end`, once the application starts:
 
 ```sh
-./target/release/cdilink --port /dev/ttyUSB0 upload app.bin \
+./target/release/cdi-serial --port /dev/ttyUSB0 upload app.bin \
   --address 8000 --end --reset --terminal
 ```
 
@@ -71,26 +91,102 @@ application emits diagnostics at another speed, add (for example)
 To retain the raw terminal bytes as well as displaying them, add
 `--terminal-log cdi-debug.log`. The log file is opened in append mode.
 
-## Reading ROM or memory
+### Starting the full stub
 
-`download` reads an address range from a **running full `cdi_stub`**. The
-player's ROM download subset used by the direct application-loader workflow
-does not implement the `READ` request, so `--reset` must not be used for this.
-After starting or retaining a full stub, for example, read a 512 KiB ROM with:
+The current tool deliberately does not yet install a full stub. If you have
+the original CD-i Link executable, use it once to upload its bundled `cdistub`
+and leave it running:
 
 ```sh
-./target/release/cdilink --port /dev/ttyUSB0 download cdi.rom \
-  --address 400000 --size 524288 --wait
+wine /path/to/cdilink.exe -port 5 -keep
+```
+
+Start or power on the player when CD-i Link says it is waiting for the stub.
+On players that support the ROM download subset, CD-i Link uploads `cdistub`
+automatically. `-keep` is important: it prevents CD-i Link from sending `END`,
+so the full stub remains active after the program exits.
+
+For a player without the ROM download subset, boot the `cdi_stub` disc instead.
+Some models need a model-specific stub; consult the original CD-i Stub package
+for the appropriate image. Do not send Ctrl-C or use this tool's `--reset`
+after the full stub is running.
+
+### Reading a memory range
+
+The full stub normally begins at 9600 baud. Once it is active, read a 512 KiB
+ROM with:
+
+```sh
+./target/release/cdi-serial --port /dev/ttyUSB0 download cdi.rom \
+  --address 400000 --size 524288
 ```
 
 Addresses are hexadecimal. The destination file is created only after the
 complete transfer succeeds; `--chunk-size` defaults to 256 bytes.
 
+To speed up a read, request a higher full-Stub transfer rate. The Stub chooses
+the highest speed it supports that does not exceed the requested value, then
+the client switches its serial port to the selected rate:
+
+```sh
+./target/release/cdi-serial --port /dev/ttyUSB0 download cdi.rom \
+  --address 400000 --size 524288 --download-baud 19200
+```
+
+This is a negotiated switch, unlike the global `--baud` option, which only
+sets the serial speed used to connect to an already-running Stub.
+
+`--wait` is only for when this program is already running before a full stub
+is started manually (for example, from a `cdi_stub` disc). A full stub emits
+its activation marker once; CD-i Link consumes that marker while installing
+the stub with `-keep`.
+
+## Credits and references
+
+This is an independent Rust implementation. It does not include or redistribute
+CD-i Link, CD-i Stub, or any CD-i ROM image.
+
+- **CD-i Stub 0.5.1 and the Stub protocol** — created by **CD-i Fan**.
+  The protocol framing and `ADDRESS`, `WRITE`, `READ`, `EXECUTE`, and `END`
+  message behavior in this project were derived from the distribution's
+  `stub/stubdefs.d` and `stub/stubcore.s` source files. The Stub source is
+  distributed under the LGPL; see the package's licence files.
+  [CD-i Stub / CD-i Link downloads](https://www.cdiemu.org/site/cdilink.htm)
+
+- **CD-i Link 0.5.1** — created by **CD-i Fan**. Its accompanying
+  `cdilink.txt` informed the command semantics, including full-stub bootstrap,
+  `-keep`, terminal mode, and ROM-reading workflow.
+  [CD-i Link project page](https://www.cdiemu.org/site/cdilink.htm)
+
+- **Hardware interoperability observations** — based on a serial system-call
+  trace of the original CD-i Link executable.
+  That trace established the ROM download-subset bootstrap acknowledgement,
+  9600-to-19200 baud transition, 256-byte write size, and request timing used
+  by the direct-loader path.
+
+Please use ROM dumps only where you are entitled to do so. CD-i system ROMs
+remain copyrighted and are not part of this project.
+
 ## Scope
 
 This initial tool implements the documented transfer core: `ADDRESS`, `WRITE`,
-`EXECUTE`, and `END`, with acknowledgements and retry on checksum rejection.
+`READ`, `EXECUTE`, and `END`, with acknowledgements and retry on checksum
+rejection.
 The ROM-only download subset is sufficient for the direct application-loader
-workflow above; a full stub is only needed for `--wait` and future read/file
-operations. Automatic discovery, bundled stub injection, ROM dumping, and OS-9
-file copy are intentionally out of scope for this focused application uploader.
+workflow above; a full stub is needed for memory reads. Automatic discovery,
+bundled stub injection, ROM-location detection, and OS-9 file copy are
+intentionally out of scope for this focused serial tool.
+
+## Troubleshooting
+
+### Problems with user rights
+
+On Linux, your user must be allowed to open the serial device. For the common
+`/dev/ttyUSB0` case this is usually the `dialout` group:
+
+```sh
+sudo usermod -aG dialout "$USER"
+```
+Log out and back in after changing group membership. Check the ownership and
+group of a particular port with `ls -l /dev/ttyUSB0`; distributions may use a
+different group such as `uucp`.
