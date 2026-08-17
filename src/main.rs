@@ -72,6 +72,10 @@ enum Command {
         /// --terminal. Defaults to the current transfer speed.
         #[arg(long, requires = "terminal")]
         terminal_baud: Option<u32>,
+        /// Append incoming terminal bytes to this file as well as printing
+        /// them to standard output. Requires --terminal.
+        #[arg(long, value_name = "FILE", requires = "terminal")]
+        terminal_log: Option<String>,
     },
 }
 
@@ -146,7 +150,7 @@ fn progress_bar(done: usize, total: usize) {
 /// A deliberately small, receive-only terminal mode. CD-i Link's `-terminal`
 /// mode is useful for OS-9/application diagnostics that are written to the
 /// serial port after `END` starts normal boot processing.
-fn terminal<T: Read>(io: &mut T) -> Result<()> {
+fn terminal<T: Read>(io: &mut T, mut log: Option<fs::File>) -> Result<()> {
     eprintln!("Serial terminal open; press Ctrl-C to exit.");
     let mut output = std::io::stdout();
     let mut buffer = [0_u8; 1024];
@@ -158,6 +162,11 @@ fn terminal<T: Read>(io: &mut T) -> Result<()> {
                     .write_all(&buffer[..count])
                     .context("writing serial terminal output")?;
                 output.flush().context("flushing serial terminal output")?;
+                if let Some(log) = &mut log {
+                    log.write_all(&buffer[..count])
+                        .context("writing serial terminal log")?;
+                    log.flush().context("flushing serial terminal log")?;
+                }
             }
             Err(error)
                 if matches!(
@@ -202,6 +211,7 @@ fn main() -> Result<()> {
             end,
             terminal: terminal_requested,
             terminal_baud,
+            terminal_log,
         } => {
             if !(1..=u16::MAX as usize).contains(chunk_size) {
                 bail!("--chunk-size must be in 1..=65535");
@@ -252,7 +262,17 @@ fn main() -> Result<()> {
                         .set_baud_rate(*baud)
                         .with_context(|| format!("switching serial terminal to {baud} baud"))?;
                 }
-                terminal(session.transport_mut())?;
+                let log = terminal_log
+                    .as_deref()
+                    .map(|path| {
+                        fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(path)
+                            .with_context(|| format!("opening serial terminal log {path}"))
+                    })
+                    .transpose()?;
+                terminal(session.transport_mut(), log)?;
             }
         }
     }

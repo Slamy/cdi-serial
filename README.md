@@ -68,6 +68,9 @@ The terminal is receive-only and exits with Ctrl-C. By default it stays at the
 application emits diagnostics at another speed, add (for example)
 `--terminal-baud 9600`.
 
+To retain the raw terminal bytes as well as displaying them, add
+`--terminal-log cdi-debug.log`. The log file is opened in append mode.
+
 ## Scope
 
 This initial tool implements the documented transfer core: `ADDRESS`, `WRITE`,
