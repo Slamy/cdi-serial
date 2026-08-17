@@ -159,11 +159,11 @@ cdi-serial --port /dev/ttyUSB0 put settings.bin /nvr/settings.bin
 The destination must not already exist. `put` uses OS-9 `I$Create` followed
 by `I$Write`; it does not overwrite existing files.
 
-## Read-only FUSE mount (Linux)
+## FUSE mount (Linux)
 
-With a full Stub running, `mount` presents `/cd` and `/nvr` as a read-only
-host filesystem. Install your distribution's FUSE 3 package if needed (for
-example, `sudo apt install fuse3`), then mount an existing empty directory:
+With a full Stub running, `mount` presents `/cd` and `/nvr` as a host
+filesystem. Install your distribution's FUSE 3 package if needed (for example,
+`sudo apt install fuse3`), then mount an existing empty directory:
 
 ```sh
 mkdir -p /tmp/cdi-player
@@ -183,9 +183,11 @@ Unmount it when finished:
 fusermount3 -u /tmp/cdi-player
 ```
 
-The mount never changes the player. Files are fetched on first access and
-cached for the lifetime of the mount; use `put` for deliberate writes to
-writable OS-9 storage.
+Files are fetched on first access and cached for the lifetime of the mount.
+New regular files may be written only in `/nvr`; their contents are staged
+locally and sent to the player when the file is closed. `/cd`,
+existing files, directories, rename, and deletion remain read-only or
+unsupported. Use `put` when you want an explicit one-shot transfer instead.
 
 ## MiSTer FPGA
 
@@ -247,5 +249,5 @@ startup objects.
 
 The tool implements `ADDRESS`, `WRITE`, `READ`, `EXECUTE`, and `END`, including
 acknowledgements and retry on checksum rejection. It supports full-Stub
-bootstrap, directory listing, OS-9 file copy, and a read-only FUSE view. It
+bootstrap, directory listing, OS-9 file copy, and a FUSE view. It
 does not provide automatic player discovery or ROM-location detection.

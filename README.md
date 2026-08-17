@@ -40,8 +40,8 @@ Copy an OS-9 file from the player without finding its memory address or size:
 `get /cd/copyright copyright`.
 Copy a new host file to writable NVR storage with
 `put settings.bin /nvr/settings.bin`.
-On Linux, `mount /path/to/mountpoint` exposes a read-only FUSE view of `/cd`
-and `/nvr` for ordinary tools such as `ls` and `cp`.
+On Linux, `mount /path/to/mountpoint` exposes `/cd` and `/nvr` through FUSE
+for ordinary tools such as `ls` and `cp`; it can create new files in `/nvr`.
 
 For installation, full-Stub setup, logging, FUSE mounting, MiSTer, ARM
 cross-compilation, and troubleshooting, see the [manual](docs/MANUAL.md).
