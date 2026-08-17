@@ -1,3 +1,5 @@
+#![cfg(all(unix, feature = "fuse"))]
+
 use super::*;
 use crate::os9::{cdfm_entries, get_file, put_file, read_directory};
 use std::{

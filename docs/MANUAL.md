@@ -219,9 +219,15 @@ CDI_SERIAL_PORT=/dev/ttyUSB0 cargo test --test serial_integration -- --ignored
 
 ## FUSE mount (Linux)
 
-With a full Stub running, `mount` presents `/cd` and `/nvr` as a host
-filesystem. Install your distribution's FUSE 3 package if needed (for example,
-`sudo apt install fuse3`), then mount an existing empty directory:
+The `mount` command is optional and is not included in a default build. With a
+full Stub running, install your distribution's FUSE 3 package if needed (for
+example, `sudo apt install fuse3`), then build with FUSE support:
+
+```sh
+cargo build --release --features fuse
+```
+
+Mount an existing empty directory:
 
 ```sh
 mkdir -p /tmp/cdi-player

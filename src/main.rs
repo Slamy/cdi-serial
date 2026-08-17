@@ -8,7 +8,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use cdi_serial::{REG_A0, REG_CARRY, REG_D0, REG_D1, Session};
 use clap::{Parser, Subcommand};
-#[cfg(unix)]
+#[cfg(all(unix, feature = "fuse"))]
 mod fuse;
 mod os9;
 
@@ -185,7 +185,7 @@ enum Command {
         end: bool,
     },
     /// Mount /cd and /nvr using FUSE (Unix); only new files in /nvr can be written.
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "fuse"))]
     Mount {
         /// Existing empty host directory used as mount point.
         mountpoint: String,
@@ -1222,7 +1222,7 @@ fn main() -> Result<()> {
             }
             println!("Done.");
         }
-        #[cfg(unix)]
+        #[cfg(all(unix, feature = "fuse"))]
         Command::Mount { mountpoint } => {
             let fs = fuse::CdiFuse::new(session, cli.verbose);
             eprintln!(
