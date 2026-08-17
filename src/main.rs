@@ -40,6 +40,9 @@ struct Cli {
     /// perform a protocol-directed local baud-rate switch.
     #[arg(long)]
     mister: bool,
+    /// Print protocol and OS-9 operation diagnostics to stderr.
+    #[arg(short, long)]
+    verbose: bool,
     #[command(subcommand)]
     command: Command,
 }
@@ -317,6 +320,12 @@ const OS9_FILE_READ_WRITE: u32 = 0x03;
 const OS9_OWNER_READ_WRITE: u32 = 0x03;
 const OS9_DIRECTORY_ENTRY_SIZE: usize = 32;
 
+fn os9_trace(enabled: bool, message: impl std::fmt::Display) {
+    if enabled {
+        eprintln!("[os9] {message}");
+    }
+}
+
 fn cdfm_entries(data: &[u8]) -> Vec<(u32, u32, String)> {
     let mut entries = Vec::new();
     // CDFM presents compact-disc directory records. Their fixed prefix has a
@@ -385,6 +394,7 @@ fn read_directory<T: Read + Write>(
     session: &mut Session<T>,
     path: &str,
     read_size: usize,
+    trace: bool,
 ) -> Result<Vec<u8>> {
     if read_size == 0 || read_size > u16::MAX as usize || read_size % OS9_DIRECTORY_ENTRY_SIZE != 0
     {
@@ -414,6 +424,7 @@ fn read_directory<T: Read + Write>(
     session
         .set_registers(REG_D0 | REG_A0, &[OS9_DIRECTORY_READ, path_buffer])
         .context("setting registers for OS-9 directory open")?;
+    os9_trace(trace, format!("I$Open {path:?} (directory)"));
     let open_result = session
         .os9_call(OS9_I_OPEN, 0)
         .context("opening OS-9 directory")?;
@@ -430,6 +441,7 @@ fn read_directory<T: Read + Write>(
     session
         .set_registers(REG_D1 | REG_A0, &[0, data_buffer])
         .context("setting registers for OS-9 directory status")?;
+    os9_trace(trace, format!("I$GetStt {path:?}"));
     let status_result = session
         .os9_call(OS9_I_GETSTT, 0)
         .context("querying OS-9 directory status")?;
@@ -450,6 +462,10 @@ fn read_directory<T: Read + Write>(
             session
                 .set_registers(REG_D1, &[read_size as u32])
                 .context("setting registers for OS-9 directory read")?;
+            os9_trace(
+                trace,
+                format!("I$Read {path:?} ({read_size} bytes requested)"),
+            );
             let read_result = session
                 .os9_call(OS9_I_READ, 0)
                 .context("reading OS-9 directory")?;
@@ -479,6 +495,7 @@ fn read_directory<T: Read + Write>(
         }
         Ok(directory_data)
     })();
+    os9_trace(trace, format!("I$Close {path:?}"));
     let close_result = session.os9_call(OS9_I_CLOSE, 0);
     let directory_data = result?;
     close_result.context("closing OS-9 directory")?;
@@ -489,8 +506,9 @@ fn print_directory<T: Read + Write>(
     session: &mut Session<T>,
     path: &str,
     read_size: usize,
+    trace: bool,
 ) -> Result<()> {
-    let directory_data = read_directory(session, path, read_size)?;
+    let directory_data = read_directory(session, path, read_size, trace)?;
     if print_directory_entries(&directory_data) == 0 {
         eprintln!("Directory is empty.");
     }
@@ -502,6 +520,7 @@ fn get_file<T: Read + Write>(
     session: &mut Session<T>,
     remote_path: &str,
     chunk_size: usize,
+    trace: bool,
 ) -> Result<Vec<u8>> {
     if !(1..=u16::MAX as usize).contains(&chunk_size) {
         bail!("--chunk-size must be in 1..=65535");
@@ -526,6 +545,7 @@ fn get_file<T: Read + Write>(
     session
         .set_registers(REG_D0 | REG_A0, &[OS9_FILE_READ, path_buffer])
         .context("setting registers for OS-9 file open")?;
+    os9_trace(trace, format!("I$Open {remote_path:?} (read)"));
     let open_result = session
         .os9_call(OS9_I_OPEN, 0)
         .context("opening OS-9 source file")?;
@@ -544,6 +564,10 @@ fn get_file<T: Read + Write>(
             .context("setting registers for OS-9 file read")?;
         let mut data = Vec::new();
         loop {
+            os9_trace(
+                trace,
+                format!("I$Read {remote_path:?} ({chunk_size} bytes requested)"),
+            );
             let read_result = session
                 .os9_call(OS9_I_READ, 0)
                 .context("reading OS-9 source file")?;
@@ -575,6 +599,7 @@ fn get_file<T: Read + Write>(
         }
         Ok(data)
     })();
+    os9_trace(trace, format!("I$Close {remote_path:?}"));
     let close_result = session.os9_call(OS9_I_CLOSE, 0);
     let data = result?;
     close_result.context("closing OS-9 source file")?;
@@ -586,6 +611,7 @@ fn put_file<T: Read + Write>(
     local_data: &[u8],
     remote_path: &str,
     chunk_size: usize,
+    trace: bool,
 ) -> Result<()> {
     if !(1..=u16::MAX as usize).contains(&chunk_size) {
         bail!("--chunk-size must be in 1..=65535");
@@ -616,6 +642,7 @@ fn put_file<T: Read + Write>(
             &[OS9_FILE_READ_WRITE, OS9_OWNER_READ_WRITE, path_buffer],
         )
         .context("setting registers for OS-9 file create")?;
+    os9_trace(trace, format!("I$Create {remote_path:?}"));
     let create_result = session
         .os9_call(OS9_I_CREATE, 0)
         .context("creating OS-9 destination file")?;
@@ -637,6 +664,10 @@ fn put_file<T: Read + Write>(
             session
                 .write(chunk)
                 .context("copying host file data to Stub buffer")?;
+            os9_trace(
+                trace,
+                format!("I$Write {remote_path:?} ({} bytes)", chunk.len()),
+            );
             let write_result = session
                 .os9_call(OS9_I_WRITE, 0)
                 .context("writing OS-9 destination file")?;
@@ -653,13 +684,18 @@ fn put_file<T: Read + Write>(
         }
         Ok(())
     })();
+    os9_trace(trace, format!("I$Close {remote_path:?}"));
     let close_result = session.os9_call(OS9_I_CLOSE, 0);
     result?;
     close_result.context("closing OS-9 destination file")?;
     Ok(())
 }
 
-fn delete_file<T: Read + Write>(session: &mut Session<T>, remote_path: &str) -> Result<()> {
+fn delete_file<T: Read + Write>(
+    session: &mut Session<T>,
+    remote_path: &str,
+    trace: bool,
+) -> Result<()> {
     if !remote_path.starts_with('/') {
         bail!("delete requires an absolute OS-9 path, such as /nvr/old-file");
     }
@@ -685,6 +721,7 @@ fn delete_file<T: Read + Write>(session: &mut Session<T>, remote_path: &str) -> 
     session
         .set_registers(REG_D0 | REG_A0, &[OS9_FILE_READ_WRITE, path_buffer])
         .context("setting registers for OS-9 file delete")?;
+    os9_trace(trace, format!("I$Delete {remote_path:?}"));
     let delete_result = session
         .os9_call(OS9_I_DELETE, 0)
         .context("deleting OS-9 file")?;
@@ -721,6 +758,7 @@ struct PendingFile {
 
 struct CdiFuse {
     session: Mutex<Session<Box<dyn serialport::SerialPort>>>,
+    verbose: bool,
     paths: Mutex<HashMap<u64, String>>,
     directories: Mutex<HashMap<String, Vec<String>>>,
     sizes: Mutex<HashMap<String, u64>>,
@@ -769,7 +807,8 @@ impl CdiFuse {
             return Ok(names);
         }
         let mut session = self.session.lock().map_err(|_| ())?;
-        let data = read_directory(&mut *session, path, 256).map_err(|_| ())?;
+        os9_trace(self.verbose, format!("FUSE readdir {path:?}"));
+        let data = read_directory(&mut *session, path, 256, self.verbose).map_err(|_| ())?;
         let cdfm = cdfm_entries(&data);
         let names: Vec<String> = if !cdfm.is_empty() {
             let mut sizes = self.sizes.lock().unwrap();
@@ -803,7 +842,8 @@ impl CdiFuse {
             return Ok(data);
         }
         let mut session = self.session.lock().map_err(|_| ())?;
-        let data = get_file(&mut *session, path, 256).map_err(|_| ())?;
+        os9_trace(self.verbose, format!("FUSE read {path:?}"));
+        let data = get_file(&mut *session, path, 256, self.verbose).map_err(|_| ())?;
         self.files
             .lock()
             .unwrap()
@@ -835,7 +875,8 @@ impl CdiFuse {
             (file.path.clone(), file.data.clone())
         };
         let mut session = self.session.lock().map_err(|_| ())?;
-        put_file(&mut *session, &data, &path, 256).map_err(|_| ())?;
+        os9_trace(self.verbose, format!("FUSE commit {path:?}"));
+        put_file(&mut *session, &data, &path, 256, self.verbose).map_err(|_| ())?;
         self.pending
             .lock()
             .map_err(|_| ())?
@@ -1103,11 +1144,10 @@ impl Filesystem for CdiFuse {
             reply.error(Errno::EBUSY);
             return;
         }
-        let result = self
-            .session
-            .lock()
-            .map_err(|_| ())
-            .and_then(|mut session| delete_file(&mut *session, &path).map_err(|_| ()));
+        let result = self.session.lock().map_err(|_| ()).and_then(|mut session| {
+            os9_trace(self.verbose, format!("FUSE unlink {path:?}"));
+            delete_file(&mut *session, &path, self.verbose).map_err(|_| ())
+        });
         match result {
             Ok(()) => {
                 self.files
@@ -1353,7 +1393,7 @@ fn main() -> Result<()> {
                 }
                 eprintln!("Stub active: {}", greeting.trim());
             }
-            print_directory(&mut session, path, *read_size)?;
+            print_directory(&mut session, path, *read_size, cli.verbose)?;
         }
         Command::Get {
             remote_path,
@@ -1372,7 +1412,7 @@ fn main() -> Result<()> {
                 }
                 eprintln!("Stub active: {}", greeting.trim());
             }
-            let data = get_file(&mut session, remote_path, *chunk_size)?;
+            let data = get_file(&mut session, remote_path, *chunk_size, cli.verbose)?;
             fs::write(local_file, &data)
                 .with_context(|| format!("writing downloaded file to {local_file}"))?;
             eprintln!("Copied {} bytes to {local_file}.", data.len());
@@ -1396,7 +1436,7 @@ fn main() -> Result<()> {
             }
             let data = fs::read(local_file)
                 .with_context(|| format!("reading host source file {local_file}"))?;
-            put_file(&mut session, &data, remote_path, *chunk_size)?;
+            put_file(&mut session, &data, remote_path, *chunk_size, cli.verbose)?;
             eprintln!("Copied {} bytes to {remote_path}.", data.len());
         }
         Command::Delete { remote_path, wait } => {
@@ -1411,7 +1451,7 @@ fn main() -> Result<()> {
                 }
                 eprintln!("Stub active: {}", greeting.trim());
             }
-            delete_file(&mut session, remote_path)?;
+            delete_file(&mut session, remote_path, cli.verbose)?;
             eprintln!("Deleted {remote_path}.");
         }
         Command::Mount { mountpoint } => {
@@ -1419,6 +1459,7 @@ fn main() -> Result<()> {
             paths.insert(1, "/".to_owned());
             let fs = CdiFuse {
                 session: Mutex::new(session),
+                verbose: cli.verbose,
                 paths: Mutex::new(paths),
                 directories: Mutex::new(HashMap::new()),
                 sizes: Mutex::new(HashMap::new()),

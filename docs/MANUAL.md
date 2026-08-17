@@ -192,6 +192,14 @@ mkdir -p /tmp/cdi-player
 cdi-serial --port /dev/ttyUSB0 mount /tmp/cdi-player
 ```
 
+Add `--verbose` before `mount` to print FUSE activity and each corresponding
+OS-9 call (`I$Open`, `I$Read`, `I$Create`, `I$Write`, `I$Delete`, and
+`I$Close`) to stderr:
+
+```sh
+cdi-serial --port /dev/ttyUSB0 --verbose mount /tmp/cdi-player
+```
+
 Keep that command running. In another terminal, read files normally:
 
 ```sh
