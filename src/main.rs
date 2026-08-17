@@ -1,12 +1,21 @@
 use std::{
+    collections::HashMap,
+    ffi::OsStr,
     fs,
     io::{Read, Write},
+    sync::Mutex,
     time::Duration,
+    time::SystemTime,
 };
 
 use anyhow::{Context, Result, bail};
 use cdi_serial::{REG_A0, REG_CARRY, REG_D0, REG_D1, Session};
 use clap::{Parser, Subcommand};
+use fuser::{
+    Config, Errno, FileAttr, FileHandle, FileType, Filesystem, FopenFlags, Generation, INodeNo,
+    LockOwner, MountOption, OpenFlags, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, ReplyOpen,
+    Request,
+};
 
 const MISTER_BAUD: u32 = 115_200;
 
@@ -138,6 +147,11 @@ enum Command {
         /// Wait for the full Stub activation marker before transferring.
         #[arg(long)]
         wait: bool,
+    },
+    /// Mount a read-only view of /cd and /nvr using FUSE (Linux).
+    Mount {
+        /// Existing empty host directory used as mount point.
+        mountpoint: String,
     },
     /// Upload a memory range from a running full CD-i Stub into a local file.
     Upload {
@@ -357,11 +371,11 @@ fn print_directory_entries(data: &[u8]) -> usize {
     entries
 }
 
-fn print_directory<T: Read + Write>(
+fn read_directory<T: Read + Write>(
     session: &mut Session<T>,
     path: &str,
     read_size: usize,
-) -> Result<()> {
+) -> Result<Vec<u8>> {
     if read_size == 0 || read_size > u16::MAX as usize || read_size % OS9_DIRECTORY_ENTRY_SIZE != 0
     {
         bail!("--read-size must be a non-zero multiple of {OS9_DIRECTORY_ENTRY_SIZE}, up to 65535");
@@ -458,6 +472,15 @@ fn print_directory<T: Read + Write>(
     let close_result = session.os9_call(OS9_I_CLOSE, 0);
     let directory_data = result?;
     close_result.context("closing OS-9 directory")?;
+    Ok(directory_data)
+}
+
+fn print_directory<T: Read + Write>(
+    session: &mut Session<T>,
+    path: &str,
+    read_size: usize,
+) -> Result<()> {
+    let directory_data = read_directory(session, path, read_size)?;
     if print_directory_entries(&directory_data) == 0 {
         eprintln!("Directory is empty.");
     }
@@ -624,6 +647,214 @@ fn put_file<T: Read + Write>(
     result?;
     close_result.context("closing OS-9 destination file")?;
     Ok(())
+}
+
+const FUSE_TTL: Duration = Duration::from_secs(1);
+struct CdiFuse {
+    session: Mutex<Session<Box<dyn serialport::SerialPort>>>,
+    paths: Mutex<HashMap<u64, String>>,
+    directories: Mutex<HashMap<String, Vec<String>>>,
+    sizes: Mutex<HashMap<String, u64>>,
+    files: Mutex<HashMap<String, Vec<u8>>>,
+}
+
+impl CdiFuse {
+    fn attr(ino: u64, directory: bool, size: u64) -> FileAttr {
+        FileAttr {
+            ino: INodeNo(ino),
+            size,
+            blocks: size.div_ceil(512),
+            atime: SystemTime::now(),
+            mtime: SystemTime::now(),
+            ctime: SystemTime::now(),
+            crtime: SystemTime::now(),
+            kind: if directory {
+                FileType::Directory
+            } else {
+                FileType::RegularFile
+            },
+            perm: if directory { 0o555 } else { 0o444 },
+            nlink: 1,
+            uid: 0,
+            gid: 0,
+            rdev: 0,
+            blksize: 256,
+            flags: 0,
+        }
+    }
+    fn path(&self, ino: u64) -> Option<String> {
+        self.paths.lock().ok()?.get(&ino).cloned()
+    }
+    fn inode(&self, path: String) -> u64 {
+        let mut paths = self.paths.lock().unwrap();
+        if let Some((&ino, _)) = paths.iter().find(|(_, value)| **value == path) {
+            return ino;
+        }
+        let ino = paths.len() as u64 + 2;
+        paths.insert(ino, path);
+        ino
+    }
+    fn names(&self, path: &str) -> std::result::Result<Vec<String>, ()> {
+        if let Some(names) = self.directories.lock().unwrap().get(path).cloned() {
+            return Ok(names);
+        }
+        let mut session = self.session.lock().map_err(|_| ())?;
+        let data = read_directory(&mut *session, path, 256).map_err(|_| ())?;
+        let cdfm = cdfm_entries(&data);
+        let names: Vec<String> = if !cdfm.is_empty() {
+            let mut sizes = self.sizes.lock().unwrap();
+            cdfm.into_iter()
+                .filter_map(|(_, size, name)| {
+                    (name != ".").then(|| {
+                        sizes.insert(format!("{path}/{name}"), size as u64);
+                        name
+                    })
+                })
+                .collect()
+        } else {
+            data.chunks_exact(32)
+                .filter_map(|entry| {
+                    let end = entry[..28].iter().position(|&b| b == 0)?;
+                    (end > 0).then(|| String::from_utf8_lossy(&entry[..end]).into_owned())
+                })
+                .collect()
+        };
+        self.directories
+            .lock()
+            .unwrap()
+            .insert(path.to_owned(), names.clone());
+        Ok(names)
+    }
+    fn size(&self, path: &str) -> Option<u64> {
+        self.sizes.lock().ok()?.get(path).copied()
+    }
+    fn file(&self, path: &str) -> std::result::Result<Vec<u8>, ()> {
+        if let Some(data) = self.files.lock().unwrap().get(path).cloned() {
+            return Ok(data);
+        }
+        let mut session = self.session.lock().map_err(|_| ())?;
+        let data = get_file(&mut *session, path, 256).map_err(|_| ())?;
+        self.files
+            .lock()
+            .unwrap()
+            .insert(path.to_owned(), data.clone());
+        Ok(data)
+    }
+}
+impl Filesystem for CdiFuse {
+    fn lookup(&self, _: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
+        let name = name.to_string_lossy();
+        let parent_path = self.path(parent.0).unwrap_or_else(|| "/".into());
+        let path = if parent_path == "/" {
+            format!("/{name}")
+        } else {
+            format!("{parent_path}/{name}")
+        };
+        if parent_path == "/" && (name == "cd" || name == "nvr") {
+            let ino = self.inode(path);
+            reply.entry(&FUSE_TTL, &Self::attr(ino, true, 0), Generation(0));
+            return;
+        }
+        match self.names(&parent_path) {
+            Ok(names) if names.iter().any(|item| item == name.as_ref()) => {
+                let ino = self.inode(path.clone());
+                if let Some(size) = self.size(&path) {
+                    reply.entry(&FUSE_TTL, &Self::attr(ino, false, size), Generation(0));
+                } else {
+                    match self.file(&path) {
+                        Ok(data) => reply.entry(
+                            &FUSE_TTL,
+                            &Self::attr(ino, false, data.len() as u64),
+                            Generation(0),
+                        ),
+                        Err(_) => reply.error(Errno::EIO),
+                    }
+                }
+            }
+            _ => reply.error(Errno::ENOENT),
+        }
+    }
+    fn getattr(&self, _: &Request, ino: INodeNo, _: Option<FileHandle>, reply: ReplyAttr) {
+        let path = self.path(ino.0).unwrap_or_else(|| "/".into());
+        if path == "/" || path == "/cd" || path == "/nvr" {
+            reply.attr(&FUSE_TTL, &Self::attr(ino.0, true, 0));
+        } else if let Some(size) = self.size(&path) {
+            reply.attr(&FUSE_TTL, &Self::attr(ino.0, false, size));
+        } else {
+            match self.file(&path) {
+                Ok(data) => reply.attr(&FUSE_TTL, &Self::attr(ino.0, false, data.len() as u64)),
+                Err(_) => reply.error(Errno::ENOENT),
+            }
+        }
+    }
+    fn open(&self, _: &Request, _: INodeNo, _: OpenFlags, reply: ReplyOpen) {
+        reply.opened(FileHandle(0), FopenFlags::empty());
+    }
+    fn read(
+        &self,
+        _: &Request,
+        ino: INodeNo,
+        _: FileHandle,
+        offset: u64,
+        size: u32,
+        _: OpenFlags,
+        _: Option<LockOwner>,
+        reply: ReplyData,
+    ) {
+        match self.path(ino.0).and_then(|p| self.file(&p).ok()) {
+            Some(data) => {
+                let start = (offset as usize).min(data.len());
+                let end = (start + size as usize).min(data.len());
+                reply.data(&data[start..end]);
+            }
+            None => reply.error(Errno::ENOENT),
+        }
+    }
+    fn readdir(
+        &self,
+        _: &Request,
+        ino: INodeNo,
+        _: FileHandle,
+        offset: u64,
+        mut reply: ReplyDirectory,
+    ) {
+        let path = self.path(ino.0).unwrap_or_else(|| "/".into());
+        let names = if path == "/" {
+            Ok(vec!["cd".into(), "nvr".into()])
+        } else {
+            self.names(&path)
+        };
+        match names {
+            Ok(names) => {
+                let mut entries = vec![
+                    (ino.0, FileType::Directory, ".".to_owned()),
+                    (1, FileType::Directory, "..".to_owned()),
+                ];
+                entries.extend(names.into_iter().map(|name| {
+                    let child = if path == "/" {
+                        format!("/{name}")
+                    } else {
+                        format!("{path}/{name}")
+                    };
+                    let kind = if path == "/" {
+                        FileType::Directory
+                    } else {
+                        FileType::RegularFile
+                    };
+                    (self.inode(child), kind, name)
+                }));
+                for (index, (child, kind, name)) in
+                    entries.into_iter().enumerate().skip(offset as usize)
+                {
+                    if reply.add(INodeNo(child), (index + 1) as u64, kind, name) {
+                        break;
+                    }
+                }
+                reply.ok();
+            }
+            Err(_) => reply.error(Errno::EIO),
+        }
+    }
 }
 
 fn main() -> Result<()> {
@@ -849,6 +1080,23 @@ fn main() -> Result<()> {
                 .with_context(|| format!("reading host source file {local_file}"))?;
             put_file(&mut session, &data, remote_path, *chunk_size)?;
             eprintln!("Copied {} bytes to {remote_path}.", data.len());
+        }
+        Command::Mount { mountpoint } => {
+            let mut paths = HashMap::new();
+            paths.insert(1, "/".to_owned());
+            let fs = CdiFuse {
+                session: Mutex::new(session),
+                paths: Mutex::new(paths),
+                directories: Mutex::new(HashMap::new()),
+                sizes: Mutex::new(HashMap::new()),
+                files: Mutex::new(HashMap::new()),
+            };
+            eprintln!(
+                "Mounting read-only CD-i filesystem at {mountpoint}; unmount with fusermount3 -u {mountpoint}."
+            );
+            let mut config = Config::default();
+            config.mount_options = vec![MountOption::RO, MountOption::FSName("cdi-serial".into())];
+            fuser::mount(fs, mountpoint, &config).context("mounting FUSE filesystem")?;
         }
         Command::Upload {
             file,
