@@ -52,6 +52,22 @@ operation, and `--wait-for-return` is suitable only when that routine returns.
 The direct-loader handshake starts at 9600 baud, then uses 19200 baud. The
 default 256-byte writes match the working CD-i Link trace.
 
+## Reading application debug output
+
+Add `--terminal` to keep the serial connection open after the upload and copy
+incoming serial bytes to standard output. This is the equivalent of CD-i Link's
+`-terminal` mode and is useful with `--end`, once the application starts:
+
+```sh
+./target/release/cdilink --port /dev/ttyUSB0 upload app.bin \
+  --address 8000 --end --reset --terminal
+```
+
+The terminal is receive-only and exits with Ctrl-C. By default it stays at the
+19200 baud rate selected by the ROM download-subset handshake. If the
+application emits diagnostics at another speed, add (for example)
+`--terminal-baud 9600`.
+
 ## Scope
 
 This initial tool implements the documented transfer core: `ADDRESS`, `WRITE`,

@@ -1,4 +1,8 @@
-use std::{fs, io::Write, time::Duration};
+use std::{
+    fs,
+    io::{Read, Write},
+    time::Duration,
+};
 
 use anyhow::{Context, Result, bail};
 use cdilink::Session;
@@ -60,6 +64,14 @@ enum Command {
         /// Send END after upload. On the built-in download subset this resumes boot.
         #[arg(long)]
         end: bool,
+        /// Keep the serial connection open after the upload and print CD-i
+        /// debug output. Exit with Ctrl-C.
+        #[arg(long)]
+        terminal: bool,
+        /// Serial speed to use after upload, immediately before entering
+        /// --terminal. Defaults to the current transfer speed.
+        #[arg(long, requires = "terminal")]
+        terminal_baud: Option<u32>,
     },
 }
 
@@ -131,6 +143,32 @@ fn progress_bar(done: usize, total: usize) {
     let _ = std::io::stderr().flush();
 }
 
+/// A deliberately small, receive-only terminal mode. CD-i Link's `-terminal`
+/// mode is useful for OS-9/application diagnostics that are written to the
+/// serial port after `END` starts normal boot processing.
+fn terminal<T: Read>(io: &mut T) -> Result<()> {
+    eprintln!("Serial terminal open; press Ctrl-C to exit.");
+    let mut output = std::io::stdout();
+    let mut buffer = [0_u8; 1024];
+    loop {
+        match io.read(&mut buffer) {
+            Ok(0) => continue,
+            Ok(count) => {
+                output
+                    .write_all(&buffer[..count])
+                    .context("writing serial terminal output")?;
+                output.flush().context("flushing serial terminal output")?;
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                ) => {}
+            Err(error) => return Err(error).context("reading serial terminal output"),
+        }
+    }
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let reset_requested = matches!(&cli.command, Command::Upload { reset: true, .. });
@@ -162,6 +200,8 @@ fn main() -> Result<()> {
             execute,
             wait_for_return,
             end,
+            terminal: terminal_requested,
+            terminal_baud,
         } => {
             if !(1..=u16::MAX as usize).contains(chunk_size) {
                 bail!("--chunk-size must be in 1..=65535");
@@ -205,6 +245,15 @@ fn main() -> Result<()> {
                 session.end().context("ending stub")?;
             }
             eprintln!("Done.");
+            if *terminal_requested {
+                if let Some(baud) = terminal_baud {
+                    session
+                        .transport_mut()
+                        .set_baud_rate(*baud)
+                        .with_context(|| format!("switching serial terminal to {baud} baud"))?;
+                }
+                terminal(session.transport_mut())?;
+            }
         }
     }
     Ok(())
