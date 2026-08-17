@@ -138,6 +138,18 @@ Use `--wait` only when launching `cdi-serial` before the full Stub announces
 itself. `--read-size` defaults to 256 bytes and must be a multiple of the
 32-byte OS-9 directory-entry size.
 
+## Copying files from the player
+
+`get` reads an OS-9 file through the full Stub, so it does not need a memory
+address or size. The local destination is written only after the transfer
+succeeds:
+
+```sh
+cdi-serial --port /dev/ttyUSB0 get /cd/copyright copyright
+```
+
+Use `--chunk-size` to change the 256-byte default read size.
+
 ## MiSTer FPGA
 
 MiSTer's Linux serial connection is fixed at 115200 baud. Build with the

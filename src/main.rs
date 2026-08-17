@@ -109,6 +109,21 @@ enum Command {
         #[arg(long, default_value_t = 256)]
         read_size: usize,
     },
+    /// Copy an OS-9 file from the CD-i player to the host through a running
+    /// full CD-i Stub.
+    Get {
+        /// Source OS-9 path on the CD-i player, for example /cd/copyright.
+        remote_path: String,
+        /// Destination file on the host. It is written after a successful
+        /// complete transfer only.
+        local_file: String,
+        /// Bytes requested from OS-9 per read (1 through 65535).
+        #[arg(long, default_value_t = 256)]
+        chunk_size: usize,
+        /// Wait for the full Stub activation marker before transferring.
+        #[arg(long)]
+        wait: bool,
+    },
     /// Upload a memory range from a running full CD-i Stub into a local file.
     Upload {
         /// Destination file. It is written only after a successful transfer.
@@ -256,6 +271,7 @@ const OS9_I_READ: u16 = 0x89;
 const OS9_I_CLOSE: u16 = 0x8f;
 const OS9_I_GETSTT: u16 = 0x8d;
 const OS9_DIRECTORY_READ: u32 = 0x81;
+const OS9_FILE_READ: u32 = 0x01;
 const OS9_DIRECTORY_ENTRY_SIZE: usize = 32;
 
 fn cdfm_entries(data: &[u8]) -> Vec<(u32, u32, String)> {
@@ -428,6 +444,89 @@ fn print_directory<T: Read + Write>(
     }
     eprintln!("Done.");
     Ok(())
+}
+
+fn get_file<T: Read + Write>(
+    session: &mut Session<T>,
+    remote_path: &str,
+    chunk_size: usize,
+) -> Result<Vec<u8>> {
+    if !(1..=u16::MAX as usize).contains(&chunk_size) {
+        bail!("--chunk-size must be in 1..=65535");
+    }
+    if remote_path.as_bytes().contains(&0) {
+        bail!("source path must not contain a NUL byte");
+    }
+    session
+        .set_address(0)
+        .context("initializing full Stub address")?;
+    let mut path_bytes = remote_path.as_bytes().to_vec();
+    path_bytes.push(0);
+    let (path_buffer_size, path_buffer) = session
+        .allocate_buffer(path_bytes.len())
+        .context("allocating OS-9 source-path buffer")?;
+    if path_buffer_size < path_bytes.len() {
+        bail!("full Stub allocated an unexpectedly small OS-9 source-path buffer");
+    }
+    session
+        .write(&path_bytes)
+        .context("writing OS-9 source path")?;
+    session
+        .set_registers(REG_D0 | REG_A0, &[OS9_FILE_READ, path_buffer])
+        .context("setting registers for OS-9 file open")?;
+    let open_result = session
+        .os9_call(OS9_I_OPEN, 0)
+        .context("opening OS-9 source file")?;
+    if open_result & REG_CARRY != 0 {
+        bail!("OS-9 could not open source file {remote_path:?} (error reported by Stub)");
+    }
+
+    let (_, data_buffer) = session
+        .allocate_buffer(chunk_size)
+        .context("allocating OS-9 file data buffer")?;
+    let result = (|| -> Result<Vec<u8>> {
+        // A0 points to the file data buffer for the first I$Read. It remains
+        // there for later reads, so only D1 needs updating in the loop.
+        session
+            .set_registers(REG_D1 | REG_A0, &[chunk_size as u32, data_buffer])
+            .context("setting registers for OS-9 file read")?;
+        let mut data = Vec::new();
+        loop {
+            let read_result = session
+                .os9_call(OS9_I_READ, 0)
+                .context("reading OS-9 source file")?;
+            if read_result & REG_CARRY != 0 {
+                break;
+            }
+            session
+                .select_registers(REG_D0 | REG_D1)
+                .context("selecting OS-9 file result registers")?;
+            let registers = session
+                .read(8)
+                .context("reading OS-9 file result registers")?;
+            let d1 = u32::from_be_bytes(registers[4..8].try_into().unwrap());
+            let valid_bytes = (d1 & 0xffff) as usize;
+            if valid_bytes == 0 || valid_bytes > chunk_size {
+                break;
+            }
+            session
+                .set_address(data_buffer)
+                .context("selecting OS-9 file data buffer")?;
+            data.extend(
+                session
+                    .read(valid_bytes)
+                    .context("reading OS-9 file data from Stub")?,
+            );
+            session
+                .set_registers(REG_D1, &[chunk_size as u32])
+                .context("setting registers for next OS-9 file read")?;
+        }
+        Ok(data)
+    })();
+    let close_result = session.os9_call(OS9_I_CLOSE, 0);
+    let data = result?;
+    close_result.context("closing OS-9 source file")?;
+    Ok(data)
 }
 
 fn main() -> Result<()> {
@@ -609,6 +708,28 @@ fn main() -> Result<()> {
                 eprintln!("Stub active: {}", greeting.trim());
             }
             print_directory(&mut session, path, *read_size)?;
+        }
+        Command::Get {
+            remote_path,
+            local_file,
+            chunk_size,
+            wait,
+        } => {
+            if *wait {
+                eprintln!("Waiting for full CD-i Stub...");
+                let greeting = session
+                    .wait_for_stub(4096)
+                    .context("waiting for full CD-i Stub")?;
+                let greeting = banner(&greeting);
+                if greeting.trim().is_empty() {
+                    bail!("ROM download subset is active; file transfers require a full cdi_stub");
+                }
+                eprintln!("Stub active: {}", greeting.trim());
+            }
+            let data = get_file(&mut session, remote_path, *chunk_size)?;
+            fs::write(local_file, &data)
+                .with_context(|| format!("writing downloaded file to {local_file}"))?;
+            eprintln!("Copied {} bytes to {local_file}.", data.len());
         }
         Command::Upload {
             file,
