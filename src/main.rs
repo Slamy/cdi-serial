@@ -117,6 +117,20 @@ fn banner(bytes: &[u8]) -> String {
         .collect()
 }
 
+fn progress_bar(done: usize, total: usize) {
+    const WIDTH: usize = 30;
+    let done = done.min(total);
+    let filled = if total == 0 {
+        WIDTH
+    } else {
+        done * WIDTH / total
+    };
+    let percent = if total == 0 { 100 } else { done * 100 / total };
+    let bar = format!("{}{}", "#".repeat(filled), "-".repeat(WIDTH - filled));
+    eprint!("\rUploading [{bar}] {percent:>3}% ({done}/{total} bytes)");
+    let _ = std::io::stderr().flush();
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let reset_requested = matches!(&cli.command, Command::Upload { reset: true, .. });
@@ -172,10 +186,13 @@ fn main() -> Result<()> {
                 // receive path before issuing the first request.
                 std::thread::sleep(Duration::from_millis(500));
             }
-            eprintln!("Uploading {} bytes to 0x{address:08X}...", image.len());
+            progress_bar(0, image.len());
             session
-                .upload(*address, &image, *chunk_size)
+                .upload_with_progress(*address, &image, *chunk_size, |done| {
+                    progress_bar(done, image.len())
+                })
                 .context("upload failed")?;
+            eprintln!();
             if *execute {
                 session.execute(*address).context("execute failed")?;
                 if *wait_for_return {

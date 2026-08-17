@@ -153,12 +153,30 @@ impl<T: Read + Write> Session<T> {
     }
 
     pub fn upload(&mut self, address: u32, data: &[u8], chunk_size: usize) -> Result<()> {
+        self.upload_with_progress(address, data, chunk_size, |_| {})
+    }
+
+    /// Uploads data and reports the cumulative acknowledged byte count after
+    /// each successful WRITE request.
+    pub fn upload_with_progress<F>(
+        &mut self,
+        address: u32,
+        data: &[u8],
+        chunk_size: usize,
+        mut progress: F,
+    ) -> Result<()>
+    where
+        F: FnMut(usize),
+    {
         if !(1..=u16::MAX as usize).contains(&chunk_size) {
             return Err(Error::InvalidChunkSize(chunk_size));
         }
         self.set_address(address)?;
+        let mut transferred = 0;
         for chunk in data.chunks(chunk_size) {
             self.write(chunk)?;
+            transferred += chunk.len();
+            progress(transferred);
         }
         Ok(())
     }
@@ -295,5 +313,16 @@ mod tests {
         ]
         .concat();
         assert_eq!(bytes.output, expected);
+    }
+
+    #[test]
+    fn upload_reports_only_acknowledged_chunks() {
+        let stream = TestIo::new(vec![ACK, ACK, ACK]);
+        let mut session = Session::new(stream);
+        let mut progress = Vec::new();
+        session
+            .upload_with_progress(0x2000, &[1, 2, 3, 4, 5], 3, |bytes| progress.push(bytes))
+            .unwrap();
+        assert_eq!(progress, vec![3, 5]);
     }
 }
