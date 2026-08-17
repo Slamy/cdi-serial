@@ -1,0 +1,12 @@
+[package]
+name = "cdilink"
+version = "0.1.0"
+edition = "2024"
+description = "Upload applications to Philips CD-i players using the CD-i Stub protocol"
+license = "MIT"
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+serialport = { version = "4.8", default-features = false }
+
