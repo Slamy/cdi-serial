@@ -150,6 +150,15 @@ cdi-serial --port /dev/ttyUSB0 get /cd/copyright copyright
 
 Use `--chunk-size` to change the 256-byte default read size.
 
+To copy a new host file to writable OS-9 storage, use `put`:
+
+```sh
+cdi-serial --port /dev/ttyUSB0 put settings.bin /nvr/settings.bin
+```
+
+The destination must not already exist. `put` uses OS-9 `I$Create` followed
+by `I$Write`; it does not overwrite existing files.
+
 ## MiSTer FPGA
 
 MiSTer's Linux serial connection is fixed at 115200 baud. Build with the

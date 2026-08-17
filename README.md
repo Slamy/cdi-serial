@@ -38,6 +38,8 @@ Bootstrap a full Stub from its OS-9 module with `stub /path/to/cdistub`.
 With that Stub running, list an OS-9 directory with `dir /nvr`.
 Copy an OS-9 file from the player without finding its memory address or size:
 `get /cd/copyright copyright`.
+Copy a new host file to writable NVR storage with
+`put settings.bin /nvr/settings.bin`.
 
 For installation, full-Stub setup, logging, MiSTer, ARM cross-compilation, and
 troubleshooting, see the [manual](docs/MANUAL.md).
