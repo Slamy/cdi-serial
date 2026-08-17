@@ -8,6 +8,8 @@ use anyhow::{Context, Result, bail};
 use cdi_serial::Session;
 use clap::{Parser, Subcommand};
 
+const MISTER_BAUD: u32 = 115_200;
+
 #[derive(Debug, Parser)]
 #[command(
     name = "cdi-serial",
@@ -25,6 +27,10 @@ struct Cli {
     /// Read timeout in milliseconds.
     #[arg(long, default_value_t = 30_000)]
     timeout_ms: u64,
+    /// MiSTer serial mode: force the host connection to 115200 baud and never
+    /// perform a protocol-directed local baud-rate switch.
+    #[arg(long)]
+    mister: bool,
     #[command(subcommand)]
     command: Command,
 }
@@ -113,7 +119,8 @@ fn parse_address(text: &str) -> std::result::Result<u32, String> {
 }
 
 fn open(cli: &Cli) -> Result<Box<dyn serialport::SerialPort>> {
-    let mut port = serialport::new(&cli.port, cli.baud)
+    let baud = if cli.mister { MISTER_BAUD } else { cli.baud };
+    let mut port = serialport::new(&cli.port, baud)
         .data_bits(serialport::DataBits::Eight)
         .flow_control(serialport::FlowControl::None)
         .parity(serialport::Parity::None)
@@ -121,7 +128,7 @@ fn open(cli: &Cli) -> Result<Box<dyn serialport::SerialPort>> {
         .dtr_on_open(true)
         .timeout(Duration::from_millis(cli.timeout_ms))
         .open()
-        .with_context(|| format!("cannot open serial port {} at {} baud", cli.port, cli.baud))?;
+        .with_context(|| format!("cannot open serial port {} at {baud} baud", cli.port))?;
     // The published CD-i null-modem cable feeds these host lines into the
     // player's CTS/RTS inputs. Windows' communications API enables them; do
     // the same explicitly instead of relying on a USB adapter's defaults.
@@ -204,6 +211,28 @@ fn terminal<T: Read>(io: &mut T, mut log: Option<fs::File>) -> Result<()> {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    if cli.mister {
+        match &cli.command {
+            Command::Upload {
+                terminal_baud: Some(_),
+                ..
+            } => {
+                bail!(
+                    "--terminal-baud cannot be used with --mister; MiSTer mode is fixed at {MISTER_BAUD} baud"
+                );
+            }
+            Command::Download {
+                download_baud: Some(_),
+                ..
+            } => {
+                bail!(
+                    "--download-baud cannot be used with --mister; MiSTer mode is fixed at {MISTER_BAUD} baud"
+                );
+            }
+            _ => {}
+        }
+        eprintln!("MiSTer mode: holding serial port at {MISTER_BAUD} baud.");
+    }
     let reset_requested = matches!(&cli.command, Command::Upload { reset: true, .. });
     if reset_requested {
         // Keep this as a separate open/write/close sequence. It intentionally
@@ -249,10 +278,12 @@ fn main() -> Result<()> {
                 let greeting = banner(&greeting);
                 if greeting.trim().is_empty() {
                     eprintln!("Download subset active.");
-                    session
-                        .transport_mut()
-                        .set_baud_rate(19_200)
-                        .context("switching to 19200 baud after download-subset handshake")?;
+                    if !cli.mister {
+                        session
+                            .transport_mut()
+                            .set_baud_rate(19_200)
+                            .context("switching to 19200 baud after download-subset handshake")?;
+                    }
                 } else {
                     eprintln!("Stub active: {}", greeting.trim());
                 }

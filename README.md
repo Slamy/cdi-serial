@@ -191,6 +191,55 @@ You can then omit the environment variable:
 cargo build --release --target aarch64-unknown-linux-gnu
 ```
 
+## Usage on the Linux system on MiSTer FPGA
+
+### Cross-compiling using the official toolchain
+
+A specific version of the GNU toolchain is required.
+Please install it according to [this manual](https://mister-devel.github.io/MkDocs_MiSTer/developer/mistercompile/#general-prerequisites-for-arm-cross-compiling)
+
+```sh
+export PATH=/opt/gcc-arm-10.2-2020.11-x86_64-arm-none-linux-gnueabihf/bin:$PATH
+CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-none-linux-gnueabihf-gcc \
+  cargo build --release --target armv7-unknown-linux-gnueabihf
+```
+
+Then we can copy it over ethernet.
+
+```sh
+scp target/armv7-unknown-linux-gnueabihf/release/cdi-serial root@mister:/media/fat
+```
+
+On the MiSTer, the baud rate to Linux is always 115200 and cannot be changed!
+Use it like so.
+
+```sh
+./cdi-serial --port /dev/ttyS1 --mister upload app.bin \
+  --address 8000 --end --reset
+```
+
+### Usage differences
+
+For a MiSTer setup that requires a fixed 115200-baud serial connection, add
+`--mister` before the subcommand:
+
+```sh
+./target/release/cdi-serial --port /dev/ttyUSB0 --mister upload app.bin \
+  --address 8000 --end --reset
+```
+
+This forces the local serial port to 115200 baud from open through completion.
+In particular, it prevents the normal direct-loader transition to 19200 baud
+and does not follow any protocol-directed local baud-rate change. Do not use
+`--terminal-baud` or `--download-baud` with `--mister`.
+
+The terminal can be used as well
+
+```sh
+./target/release/cdi-serial --port /dev/ttyUSB0 --mister upload app.bin \
+  --address 8000 --end --reset --terminal
+```
+
 ## Credits and references
 
 This is an independent Rust implementation. It does not include or redistribute
