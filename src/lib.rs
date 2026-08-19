@@ -97,6 +97,13 @@ pub struct Session<T> {
     io: T,
     retries: u8,
     raw_uart_trace: bool,
+    tx_pacing: Option<TxPacing>,
+}
+
+#[derive(Clone, Copy)]
+struct TxPacing {
+    physical_baud: u32,
+    effective_baud: u32,
 }
 
 impl<T: Read + Write> Session<T> {
@@ -105,6 +112,7 @@ impl<T: Read + Write> Session<T> {
             io,
             retries: 3,
             raw_uart_trace: false,
+            tx_pacing: None,
         }
     }
 
@@ -113,6 +121,7 @@ impl<T: Read + Write> Session<T> {
             io,
             retries,
             raw_uart_trace: false,
+            tx_pacing: None,
         }
     }
 
@@ -121,6 +130,17 @@ impl<T: Read + Write> Session<T> {
     /// problems, and is written to standard error.
     pub fn set_raw_uart_trace(&mut self, enabled: bool) {
         self.raw_uart_trace = enabled;
+    }
+
+    /// Adds a delay after each UART transmission so a physically faster link
+    /// behaves like `effective_baud`. This does not change the serial port's
+    /// configured baud rate.
+    pub fn set_tx_pacing(&mut self, physical_baud: u32, effective_baud: u32) {
+        self.tx_pacing =
+            (physical_baud > effective_baud && effective_baud > 0).then_some(TxPacing {
+                physical_baud,
+                effective_baud,
+            });
     }
 
     pub fn into_inner(self) -> T {
@@ -141,9 +161,35 @@ impl<T: Read + Write> Session<T> {
         }
     }
 
+    fn pace_tx_byte(&self) {
+        let Some(pacing) = self.tx_pacing else {
+            return;
+        };
+        // 8N1 UART framing uses ten bits per byte. The physical transfer is
+        // already paced at `physical_baud`; wait only for the additional time
+        // needed to approximate the requested effective baud rate.
+        let bits = 10_u128;
+        let target_ns = bits * 1_000_000_000 / u128::from(pacing.effective_baud);
+        let physical_ns = bits * 1_000_000_000 / u128::from(pacing.physical_baud);
+        let extra_ns = target_ns.saturating_sub(physical_ns);
+        if extra_ns > 0 {
+            std::thread::sleep(std::time::Duration::from_nanos(
+                extra_ns.min(u128::from(u64::MAX)) as u64,
+            ));
+        }
+    }
+
     fn write_all(&mut self, mut bytes: &[u8]) -> io::Result<()> {
         while !bytes.is_empty() {
-            match self.io.write(bytes) {
+            // USB serial writes are ordinarily buffered, so delaying after a
+            // complete frame does not reliably space its individual UART
+            // characters. MiSTer mode therefore submits one byte at a time.
+            let write_buffer = if self.tx_pacing.is_some() {
+                &bytes[..1]
+            } else {
+                bytes
+            };
+            match self.io.write(write_buffer) {
                 Ok(0) => {
                     return Err(io::Error::new(
                         io::ErrorKind::WriteZero,
@@ -153,6 +199,7 @@ impl<T: Read + Write> Session<T> {
                 Ok(written) => {
                     self.trace_uart("TX", &bytes[..written]);
                     bytes = &bytes[written..];
+                    self.pace_tx_byte();
                 }
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
                 Err(error) => return Err(error),
@@ -522,6 +569,7 @@ mod tests {
     struct TestIo {
         input: std::io::Cursor<Vec<u8>>,
         output: Vec<u8>,
+        writes: Vec<Vec<u8>>,
     }
 
     impl TestIo {
@@ -529,6 +577,7 @@ mod tests {
             Self {
                 input: std::io::Cursor::new(input),
                 output: Vec::new(),
+                writes: Vec::new(),
             }
         }
     }
@@ -542,6 +591,7 @@ mod tests {
     impl Write for TestIo {
         fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
             self.output.extend_from_slice(buffer);
+            self.writes.push(buffer.to_vec());
             Ok(buffer.len())
         }
 
@@ -566,6 +616,20 @@ mod tests {
         let stream = session.into_inner();
         let frame = request(ADDRESS, &0x1000_u32.to_be_bytes());
         assert_eq!(stream.output, [frame.clone(), frame].concat());
+    }
+
+    #[test]
+    fn tx_pacing_submits_each_uart_byte_separately() {
+        let stream = TestIo::new(vec![ACK]);
+        let mut session = Session::new(stream);
+        session.set_tx_pacing(115_200, 38_000);
+        session.set_address(0x1000).unwrap();
+        let stream = session.into_inner();
+        assert!(stream.writes.iter().all(|write| write.len() == 1));
+        assert_eq!(
+            stream.writes.len(),
+            request(ADDRESS, &0x1000_u32.to_be_bytes()).len()
+        );
     }
 
     #[test]

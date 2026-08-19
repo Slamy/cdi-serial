@@ -278,7 +278,10 @@ CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-none-linux-gnueabihf-gcc \
 scp target/armv7-unknown-linux-gnueabihf/release/cdi-serial root@mister:/media/fat
 ```
 
-Use `--mister` to force 115200 baud for the entire session:
+Use `--mister` to keep the port at 115200 baud for the entire session. Each
+transmitted protocol byte is additionally delayed to approximate a 38000-baud
+link; this pacing is needed by the MiSTer implementation without changing its
+fixed serial-port configuration, since OS9 is unable to keep up:
 
 ```sh
 ./cdi-serial --port /dev/ttyS1 --mister download app.bin --address 8000 --end --reset --terminal

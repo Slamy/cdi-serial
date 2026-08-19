@@ -15,6 +15,7 @@ mod os9;
 use os9::{delete_file, get_file, print_directory, put_file};
 
 const MISTER_BAUD: u32 = 115_200;
+const MISTER_EFFECTIVE_BAUD: u32 = 30_000;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -924,6 +925,12 @@ fn main() -> Result<()> {
     let port = open(&cli)?;
     let mut session = Session::new(port);
     session.set_raw_uart_trace(cli.verbose > 1);
+    if cli.mister {
+        session.set_tx_pacing(MISTER_BAUD, MISTER_EFFECTIVE_BAUD);
+        eprintln!(
+            "MiSTer mode: pacing each transmitted byte as {MISTER_EFFECTIVE_BAUD} baud while the port remains at {MISTER_BAUD} baud."
+        );
+    }
     match &cli.command {
         Command::Wait { max_banner_bytes } => {
             let greeting = session
