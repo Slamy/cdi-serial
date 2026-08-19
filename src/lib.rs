@@ -96,15 +96,31 @@ pub fn request(kind: u8, body: &[u8]) -> Vec<u8> {
 pub struct Session<T> {
     io: T,
     retries: u8,
+    raw_uart_trace: bool,
 }
 
 impl<T: Read + Write> Session<T> {
     pub fn new(io: T) -> Self {
-        Self { io, retries: 3 }
+        Self {
+            io,
+            retries: 3,
+            raw_uart_trace: false,
+        }
     }
 
     pub fn with_retries(io: T, retries: u8) -> Self {
-        Self { io, retries }
+        Self {
+            io,
+            retries,
+            raw_uart_trace: false,
+        }
+    }
+
+    /// Enables a hexadecimal trace of every byte transferred through the
+    /// session. This is intended for diagnosing serial-link and Stub protocol
+    /// problems, and is written to standard error.
+    pub fn set_raw_uart_trace(&mut self, enabled: bool) {
+        self.raw_uart_trace = enabled;
     }
 
     pub fn into_inner(self) -> T {
@@ -115,14 +131,69 @@ impl<T: Read + Write> Session<T> {
         &mut self.io
     }
 
+    fn trace_uart(&self, direction: &str, bytes: &[u8]) {
+        if self.raw_uart_trace && !bytes.is_empty() {
+            eprint!("UART {direction}:");
+            for byte in bytes {
+                eprint!(" {byte:02X}");
+            }
+            eprintln!();
+        }
+    }
+
+    fn write_all(&mut self, mut bytes: &[u8]) -> io::Result<()> {
+        while !bytes.is_empty() {
+            match self.io.write(bytes) {
+                Ok(0) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::WriteZero,
+                        "failed to write complete UART frame",
+                    ));
+                }
+                Ok(written) => {
+                    self.trace_uart("TX", &bytes[..written]);
+                    bytes = &bytes[written..];
+                }
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
+    }
+
+    fn read_exact(&mut self, mut bytes: &mut [u8]) -> io::Result<()> {
+        while !bytes.is_empty() {
+            match self.io.read(bytes) {
+                Ok(0) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "UART closed while reading a frame",
+                    ));
+                }
+                Ok(read) => {
+                    self.trace_uart("RX", &bytes[..read]);
+                    let (_, remaining) = bytes.split_at_mut(read);
+                    bytes = remaining;
+                }
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.io.flush()
+    }
+
     /// Waits for a positive acknowledgement, resending a request after NAK.
     fn send_acknowledged(&mut self, frame: &[u8], operation: &'static str) -> Result<()> {
         for _ in 0..=self.retries {
-            self.io.write_all(&frame[..1])?;
-            self.io.flush()?;
+            self.write_all(&frame[..1])?;
+            self.flush()?;
             std::thread::sleep(std::time::Duration::from_millis(1));
-            self.io.write_all(&frame[1..])?;
-            self.io.flush()?;
+            self.write_all(&frame[1..])?;
+            self.flush()?;
             match self.read_acknowledgement()? {
                 ACK => return Ok(()),
                 NAK => continue,
@@ -138,7 +209,7 @@ impl<T: Read + Write> Session<T> {
 
     fn read_notification(&mut self) -> Result<u8> {
         let mut byte = [0];
-        self.io.read_exact(&mut byte)?;
+        self.read_exact(&mut byte)?;
         Ok(byte[0])
     }
 
@@ -197,19 +268,19 @@ impl<T: Read + Write> Session<T> {
         )?;
         self.read_response_header(BUFFER)?;
         let mut response = [0; 6];
-        self.io.read_exact(&mut response)?;
+        self.read_exact(&mut response)?;
         let checksum = self.read_notification()?;
         let computed = [DLE, BUFFER]
             .into_iter()
             .chain(response)
             .fold(0, |check, byte| check ^ byte);
         if checksum != computed {
-            self.io.write_all(&[NAK])?;
-            self.io.flush()?;
+            self.write_all(&[NAK])?;
+            self.flush()?;
             return Err(Error::InvalidReadResponse);
         }
-        self.io.write_all(&[ACK])?;
-        self.io.flush()?;
+        self.write_all(&[ACK])?;
+        self.flush()?;
         Ok((
             usize::from(u16::from_be_bytes([response[0], response[1]])),
             u32::from_be_bytes([response[2], response[3], response[4], response[5]]),
@@ -251,19 +322,19 @@ impl<T: Read + Write> Session<T> {
         self.send_acknowledged(&request(OS9CALL, &body), "OS-9 call request")?;
         self.read_response_header(OS9CALL)?;
         let mut mask = [0; 4];
-        self.io.read_exact(&mut mask)?;
+        self.read_exact(&mut mask)?;
         let checksum = self.read_notification()?;
         let computed = [DLE, OS9CALL]
             .into_iter()
             .chain(mask)
             .fold(0, |check, byte| check ^ byte);
         if checksum != computed {
-            self.io.write_all(&[NAK])?;
-            self.io.flush()?;
+            self.write_all(&[NAK])?;
+            self.flush()?;
             return Err(Error::InvalidReadResponse);
         }
-        self.io.write_all(&[ACK])?;
-        self.io.flush()?;
+        self.write_all(&[ACK])?;
+        self.flush()?;
         Ok(u32::from_be_bytes(mask))
     }
 
@@ -314,12 +385,12 @@ impl<T: Read + Write> Session<T> {
                 return Err(Error::InvalidReadResponse);
             }
             let mut size_bytes = [0; 2];
-            self.io.read_exact(&mut size_bytes)?;
+            self.read_exact(&mut size_bytes)?;
             if usize::from(u16::from_be_bytes(size_bytes)) != size {
                 return Err(Error::InvalidReadResponse);
             }
             let mut data = vec![0; size];
-            self.io.read_exact(&mut data)?;
+            self.read_exact(&mut data)?;
             let checksum = self.read_notification()?;
             let computed = [DLE, READ]
                 .into_iter()
@@ -327,12 +398,12 @@ impl<T: Read + Write> Session<T> {
                 .chain(data.iter().copied())
                 .fold(0, |check, byte| check ^ byte);
             if checksum == computed {
-                self.io.write_all(&[ACK])?;
-                self.io.flush()?;
+                self.write_all(&[ACK])?;
+                self.flush()?;
                 return Ok(data);
             }
-            self.io.write_all(&[NAK])?;
-            self.io.flush()?;
+            self.write_all(&[NAK])?;
+            self.flush()?;
         }
         Err(Error::RetryLimitExceeded {
             operation: "read response",
@@ -381,22 +452,22 @@ impl<T: Read + Write> Session<T> {
             return Err(Error::InvalidReadResponse);
         }
         let mut rate = [0; 4];
-        self.io.read_exact(&mut rate)?;
+        self.read_exact(&mut rate)?;
         let checksum = self.read_notification()?;
         let computed = [DLE, BAUDRATE]
             .into_iter()
             .chain(rate)
             .fold(0, |check, byte| check ^ byte);
         if checksum != computed {
-            self.io.write_all(&[NAK])?;
-            self.io.flush()?;
+            self.write_all(&[NAK])?;
+            self.flush()?;
             return Err(Error::RetryLimitExceeded {
                 operation: "baud-rate response",
                 attempts: 1,
             });
         }
-        self.io.write_all(&[ACK])?;
-        self.io.flush()?;
+        self.write_all(&[ACK])?;
+        self.flush()?;
         Ok(u32::from_be_bytes(rate))
     }
 
@@ -428,8 +499,8 @@ impl<T: Read + Write> Session<T> {
         while banner.len() < max_bytes {
             let byte = self.read_notification()?;
             if byte == SOH {
-                self.io.write_all(&[ACK])?;
-                self.io.flush()?;
+                self.write_all(&[ACK])?;
+                self.flush()?;
                 return Ok(banner);
             }
             if byte == EM || byte == DLE {

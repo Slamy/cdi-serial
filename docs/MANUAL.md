@@ -79,8 +79,10 @@ cdi-serial --port /dev/ttyUSB0 stub /path/to/cdistub
 ```
 
 `stub` resets the player, waits for the ROM download subset, downloads the
-module to `0x8000`, and sends `END` so normal boot processing starts it. The
-full Stub then remains active.
+module to `0x8000`, and sends `END` so normal boot processing starts it. It
+then switches back from the subset's 19200 baud rate to 9600 and waits for the
+full Stub's startup banner and activation marker before returning. The full
+Stub then remains active at 9600 baud.
 
 ```sh
 cdi-serial --port /dev/ttyUSB0 upload cdi.rom --address 400000 --size 524288 --upload-baud 19200

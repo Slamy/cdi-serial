@@ -7,7 +7,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use cdi_serial::{REG_A0, REG_CARRY, REG_D0, REG_D1, Session};
-use clap::{Parser, Subcommand};
+use clap::{ArgAction, Parser, Subcommand};
 #[cfg(all(unix, feature = "fuse"))]
 mod fuse;
 mod os9;
@@ -37,9 +37,9 @@ struct Cli {
     /// perform a protocol-directed local baud-rate switch.
     #[arg(long)]
     mister: bool,
-    /// Print protocol and OS-9 operation diagnostics to stderr.
-    #[arg(short, long)]
-    verbose: bool,
+    /// Print diagnostics; repeat (-vv) to include raw UART TX/RX bytes in hex.
+    #[arg(short, long, action = ArgAction::Count)]
+    verbose: u8,
     #[command(subcommand)]
     command: Command,
 }
@@ -869,6 +869,7 @@ fn prepare_rom_read(
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let verbose = cli.verbose > 0;
     if cli.mister {
         match &cli.command {
             Command::Download {
@@ -922,6 +923,7 @@ fn main() -> Result<()> {
     }
     let port = open(&cli)?;
     let mut session = Session::new(port);
+    session.set_raw_uart_trace(cli.verbose > 1);
     match &cli.command {
         Command::Wait { max_banner_bytes } => {
             let greeting = session
@@ -1040,7 +1042,27 @@ fn main() -> Result<()> {
                 .context("Stub download failed")?;
             eprintln!();
             session.end().context("starting full Stub")?;
-            eprintln!("Full Stub started. Use `upload` to read CD-i memory.");
+            // The ROM download subset is at 19200 baud, but the OS-9 full
+            // Stub reopens its serial device at its normal 9600-baud rate.
+            // Do not return until its one-shot activation marker has arrived:
+            // otherwise a follow-up invocation can send a request while the
+            // new Stub is still printing its startup banner.
+            if !cli.mister {
+                session
+                    .transport_mut()
+                    .set_baud_rate(9_600)
+                    .context("switching to 9600 baud for full Stub startup")?;
+            }
+            eprintln!("Waiting for full CD-i Stub...");
+            let greeting = session
+                .wait_for_stub(4096)
+                .context("waiting for full CD-i Stub startup")?;
+            let greeting = banner(&greeting);
+            if greeting.trim().is_empty() {
+                eprintln!("Full Stub started. Use `upload` to read CD-i memory.");
+            } else {
+                eprintln!("Full Stub started: {}", greeting.trim());
+            }
         }
         Command::Dir {
             path,
@@ -1060,7 +1082,7 @@ fn main() -> Result<()> {
                 }
                 eprintln!("Stub active: {}", greeting.trim());
             }
-            print_directory(&mut session, path, *read_size, cli.verbose)?;
+            print_directory(&mut session, path, *read_size, verbose)?;
         }
         Command::Get {
             remote_path,
@@ -1079,7 +1101,7 @@ fn main() -> Result<()> {
                 }
                 eprintln!("Stub active: {}", greeting.trim());
             }
-            let data = get_file(&mut session, remote_path, *chunk_size, cli.verbose)?;
+            let data = get_file(&mut session, remote_path, *chunk_size, verbose)?;
             fs::write(local_file, &data)
                 .with_context(|| format!("writing downloaded file to {local_file}"))?;
             eprintln!("Copied {} bytes to {local_file}.", data.len());
@@ -1103,7 +1125,7 @@ fn main() -> Result<()> {
             }
             let data = fs::read(local_file)
                 .with_context(|| format!("reading host source file {local_file}"))?;
-            put_file(&mut session, &data, remote_path, *chunk_size, cli.verbose)?;
+            put_file(&mut session, &data, remote_path, *chunk_size, verbose)?;
             eprintln!("Copied {} bytes to {remote_path}.", data.len());
         }
         Command::Delete { remote_path, wait } => {
@@ -1118,7 +1140,7 @@ fn main() -> Result<()> {
                 }
                 eprintln!("Stub active: {}", greeting.trim());
             }
-            delete_file(&mut session, remote_path, cli.verbose)?;
+            delete_file(&mut session, remote_path, verbose)?;
             eprintln!("Deleted {remote_path}.");
         }
         Command::Rom { command } => match command {
@@ -1208,7 +1230,7 @@ fn main() -> Result<()> {
         Command::RomList { wait, end } => {
             prepare_rom_read(&mut session, *wait, None, cli.mister)?;
             eprintln!("Building ROM list...");
-            list_roms(&mut session, cli.verbose)?;
+            list_roms(&mut session, verbose)?;
             if *end {
                 session.end().context("ending stub")?;
             }
@@ -1216,7 +1238,7 @@ fn main() -> Result<()> {
         }
         Command::Mod { wait, end } => {
             prepare_rom_read(&mut session, *wait, None, cli.mister)?;
-            list_modules(&mut session, cli.verbose)?;
+            list_modules(&mut session, verbose)?;
             if *end {
                 session.end().context("ending stub")?;
             }
@@ -1224,7 +1246,7 @@ fn main() -> Result<()> {
         }
         #[cfg(all(unix, feature = "fuse"))]
         Command::Mount { mountpoint } => {
-            let fs = fuse::CdiFuse::new(session, cli.verbose);
+            let fs = fuse::CdiFuse::new(session, verbose);
             eprintln!(
                 "Mounting CD-i filesystem at {mountpoint}; only new /nvr files are writable. Unmount with fusermount3 -u {mountpoint}."
             );
