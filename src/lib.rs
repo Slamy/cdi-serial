@@ -143,6 +143,11 @@ impl<T: Read + Write> Session<T> {
             });
     }
 
+    /// Disables transmit pacing while retaining all other session settings.
+    pub fn clear_tx_pacing(&mut self) {
+        self.tx_pacing = None;
+    }
+
     pub fn into_inner(self) -> T {
         self.io
     }

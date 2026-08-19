@@ -281,7 +281,8 @@ scp target/armv7-unknown-linux-gnueabihf/release/cdi-serial root@mister:/media/f
 Use `--mister` to keep the port at 115200 baud for the entire session. Each
 transmitted protocol byte is additionally delayed to approximate a 38000-baud
 link; this pacing is needed by the MiSTer implementation without changing its
-fixed serial-port configuration, since OS9 is unable to keep up:
+fixed serial-port configuration, since OS9 is unable to keep up. Bulk data in
+`download` and `stub` is sent at the full 115200 baud rate instead:
 
 ```sh
 ./cdi-serial --port /dev/ttyS1 --mister download app.bin --address 8000 --end --reset --terminal

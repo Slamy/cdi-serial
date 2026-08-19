@@ -977,11 +977,17 @@ fn main() -> Result<()> {
                 std::thread::sleep(Duration::from_millis(500));
             }
             progress_bar("Downloading", 0, image.len());
-            session
-                .download_with_progress(*address, &image, *chunk_size, |done| {
+            if cli.mister {
+                session.clear_tx_pacing();
+            }
+            let download_result =
+                session.download_with_progress(*address, &image, *chunk_size, |done| {
                     progress_bar("Downloading", done, image.len())
-                })
-                .context("download failed")?;
+                });
+            if cli.mister {
+                session.set_tx_pacing(MISTER_BAUD, MISTER_EFFECTIVE_BAUD);
+            }
+            download_result.context("download failed")?;
             eprintln!();
             if *execute {
                 session.execute(*address).context("execute failed")?;
@@ -1042,11 +1048,17 @@ fn main() -> Result<()> {
             }
             std::thread::sleep(Duration::from_millis(500));
             progress_bar("Downloading Stub", 0, image.len());
-            session
-                .download_with_progress(*address, &image, *chunk_size, |done| {
+            if cli.mister {
+                session.clear_tx_pacing();
+            }
+            let download_result =
+                session.download_with_progress(*address, &image, *chunk_size, |done| {
                     progress_bar("Downloading Stub", done, image.len())
-                })
-                .context("Stub download failed")?;
+                });
+            if cli.mister {
+                session.set_tx_pacing(MISTER_BAUD, MISTER_EFFECTIVE_BAUD);
+            }
+            download_result.context("Stub download failed")?;
             eprintln!();
             session.end().context("starting full Stub")?;
             // The ROM download subset is at 19200 baud, but the OS-9 full
