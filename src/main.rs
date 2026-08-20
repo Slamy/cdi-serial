@@ -89,8 +89,9 @@ enum Command {
         /// --terminal. Defaults to the current transfer speed.
         #[arg(long, requires = "terminal")]
         terminal_baud: Option<u32>,
-        /// Append incoming terminal bytes to this file as well as printing
-        /// them to standard output. Requires --terminal.
+        /// Write incoming terminal bytes to this file as well as printing
+        /// them to standard output. The file is replaced on each run.
+        /// Requires --terminal.
         #[arg(long, value_name = "FILE", requires = "terminal")]
         terminal_log: Option<String>,
     },
@@ -1013,7 +1014,8 @@ fn main() -> Result<()> {
                     .map(|path| {
                         fs::OpenOptions::new()
                             .create(true)
-                            .append(true)
+                            .write(true)
+                            .truncate(true)
                             .open(path)
                             .with_context(|| format!("opening serial terminal log {path}"))
                     })

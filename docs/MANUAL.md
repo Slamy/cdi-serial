@@ -62,7 +62,8 @@ cdi-serial --port /dev/ttyUSB0 download app.bin --address 8000 --end --reset --t
 
 The terminal is receive-only. It normally stays at the post-bootstrap 19200
 baud rate. Use `--terminal-baud 9600` to override it, or
-`--terminal-log cdi-debug.log` to append the raw received bytes to a file.
+`--terminal-log cdi-debug.log` to write the raw received bytes to a file. The
+log file is replaced on each run.
 
 ## Uploading CD-i memory
 
